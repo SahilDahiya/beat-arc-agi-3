@@ -1,11 +1,12 @@
 from typing import Annotated, Literal, Self
 
-from arcengine import FrameData, GameAction, GameState
+from arcengine import FrameData, FrameDataRaw, GameAction, GameState
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 Color = Annotated[int, Field(ge=0, le=15)]
 Coordinate = Annotated[int, Field(ge=0, le=63)]
+Grid = tuple[tuple[Color, ...], ...]
 ActionName = Literal[
     "RESET",
     "ACTION1",
@@ -19,31 +20,37 @@ ActionName = Literal[
 
 
 class GameObservation(BaseModel):
-    """Immutable, toolkit-independent view of one ARC frame."""
+    """Immutable final grid and optional animation ticks from one ARC response."""
 
     model_config = ConfigDict(frozen=True)
 
     game_id: str
-    frame: tuple[tuple[tuple[Color, ...], ...], ...]
+    grid: Grid
+    ticks: tuple[Grid, ...] = ()
     state: GameState
     levels_completed: int = Field(ge=0, le=254)
     win_levels: int = Field(ge=0, le=254)
     available_actions: tuple[int, ...]
 
     @model_validator(mode="after")
-    def validate_available_actions(self) -> Self:
+    def validate_observation(self) -> Self:
         for action_id in self.available_actions:
             GameAction.from_id(action_id)
+        for grid in (*self.ticks, self.grid):
+            if grid and any(len(row) != len(grid[0]) for row in grid):
+                raise ValueError("ARC grids cannot be ragged")
         return self
 
     @classmethod
-    def from_frame(cls, frame: FrameData) -> Self:
+    def from_frame(cls, frame: FrameData | FrameDataRaw) -> Self:
+        frames = tuple(
+            tuple(tuple(cell for cell in row) for row in layer)
+            for layer in frame.frame
+        )
         return cls(
             game_id=frame.game_id,
-            frame=tuple(
-                tuple(tuple(cell for cell in row) for row in layer)
-                for layer in frame.frame
-            ),
+            grid=frames[-1] if frames else (),
+            ticks=frames[:-1],
             state=frame.state,
             levels_completed=frame.levels_completed,
             win_levels=frame.win_levels,
@@ -58,16 +65,14 @@ class GameObservation(BaseModel):
         )
 
 
-class ActionDecision(BaseModel):
-    """One fully specified ARC action proposed by the agent."""
+class ArcAction(BaseModel):
+    """One fully specified ARC environment action."""
 
     model_config = ConfigDict(frozen=True)
 
     action: ActionName
     x: Coordinate | None = None
     y: Coordinate | None = None
-    reasoning: str = Field(min_length=1)
-    confidence: float = Field(ge=0, le=1)
 
     @model_validator(mode="after")
     def validate_action_data(self) -> Self:
@@ -79,13 +84,14 @@ class ActionDecision(BaseModel):
         return self
 
     def to_game_action(self) -> GameAction:
-        action = GameAction.from_name(self.action)
-        if action.is_complex():
-            assert self.x is not None and self.y is not None
-            action.set_data({"x": self.x, "y": self.y})
-        else:
-            action.set_data({})
-        return action
+        return GameAction.from_name(self.action)
+
+    @property
+    def data(self) -> dict[str, int] | None:
+        if not self.to_game_action().is_complex():
+            return None
+        assert self.x is not None and self.y is not None
+        return {"x": self.x, "y": self.y}
 
 
 class CommitActions(BaseModel):
@@ -93,6 +99,6 @@ class CommitActions(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    actions: tuple[ActionDecision, ...] = Field(min_length=1)
+    actions: tuple[ArcAction, ...] = Field(min_length=1)
     reason: str = Field(min_length=1)
     suggestion: str = Field(min_length=1)

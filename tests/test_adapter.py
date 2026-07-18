@@ -1,17 +1,19 @@
 from arcengine import FrameData, GameAction, GameState
 
 from beat_arc_agi_3.adapter import ArcGameAdapter
-from beat_arc_agi_3.schemas import ActionDecision
+from beat_arc_agi_3.schemas import ArcAction
 
 
 class FakeEnvironment:
     action_space = [GameAction.ACTION1, GameAction.ACTION6]
 
     def __init__(self) -> None:
-        self.actions: list[GameAction] = []
+        self.actions: list[tuple[GameAction, dict[str, int] | None]] = []
 
-    def step(self, action: GameAction) -> FrameData:
-        self.actions.append(action)
+    def step(
+        self, action: GameAction, data: dict[str, int] | None = None
+    ) -> FrameData:
+        self.actions.append((action, data))
         return FrameData(
             game_id="ls20",
             frame=[[[1, 2, 3]]],
@@ -27,15 +29,8 @@ def test_adapter_exposes_actions_and_returns_typed_observation() -> None:
     assert adapter.available_actions == ("ACTION1", "ACTION6")
 
     observation = adapter.apply(
-        ActionDecision(
-            action="ACTION6",
-            x=4,
-            y=5,
-            reasoning="Inspect the marked location.",
-            confidence=0.7,
-        )
+        ArcAction(action="ACTION6", x=4, y=5)
     )
 
-    assert environment.actions[0].action_data.x == 4
-    assert environment.actions[0].action_data.y == 5
+    assert environment.actions == [(GameAction.ACTION6, {"x": 4, "y": 5})]
     assert observation.state is GameState.WIN

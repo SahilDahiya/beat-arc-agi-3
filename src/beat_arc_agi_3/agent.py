@@ -1,6 +1,9 @@
 from pydantic_ai import Agent, ModelRetry, RunContext, ToolOutput
 from pydantic_ai.models import Model
+from pydantic_ai.models.openai import OpenAIResponsesModel
+from pydantic_ai.providers.openai import OpenAIProvider
 
+from beat_arc_agi_3.config import Settings
 from beat_arc_agi_3.dependencies import AgentDeps, HistoryDetail, HistoryQuery
 from beat_arc_agi_3.schemas import CommitActions
 
@@ -16,8 +19,13 @@ A commit ends this turn, so do not request more tools alongside it.
 """.strip()
 
 
-def build_agent(model: Model | str | None = None) -> Agent[AgentDeps, CommitActions]:
-    """Build the milestone agent around an injected or configured model."""
+def build_agent(
+    model: Model | None = None,
+) -> Agent[AgentDeps, CommitActions]:
+    """Build the milestone agent around an explicitly constructed model."""
+
+    if model is None:
+        raise ValueError("model is required")
 
     agent: Agent[AgentDeps, CommitActions] = Agent(
         model,
@@ -55,3 +63,19 @@ def build_agent(model: Model | str | None = None) -> Agent[AgentDeps, CommitActi
         return output
 
     return agent
+
+
+def build_openai_model(settings: Settings) -> OpenAIResponsesModel:
+    """Construct the configured OpenAI model from explicit validated settings."""
+
+    provider_name, separator, model_name = settings.pydantic_ai_model.partition(":")
+    if provider_name != "openai" or not separator or not model_name:
+        raise ValueError(
+            "pydantic_ai_model must use the openai:<model-name> format"
+        )
+    return OpenAIResponsesModel(
+        model_name,
+        provider=OpenAIProvider(
+            api_key=settings.openai_api_key.get_secret_value()
+        ),
+    )
