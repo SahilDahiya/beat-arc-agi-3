@@ -16,7 +16,10 @@ The implemented foundation now provides:
 8. Store each run as an explicit repository-local Session with immutable metadata.
 9. Record the initial observation and each action result in that Session's append-only, game-bound JSONL Timeline.
 10. Expose recent session evidence through brief, full, and animation history views.
+11. Compose a complete real process from explicit settings and process configuration.
+12. Exercise that composition in the default test suite with a paid model request and a real online ARC action.
+13. Expose new-session process composition through `python -m beat_arc_agi_3 run` with explicit game, reusable session label, mode, and budget arguments; generated Session IDs are UTC timestamped.
 
-World-model editing, backtesting, search, model-misprediction queue cancellation, process bootstrap, and competition submission integration remain later milestones. Resuming an environment process from an existing Session is also not implemented; the current loop deliberately requires a new empty Session.
+World-model editing, backtesting, search, model-misprediction queue cancellation, and competition submission integration remain later milestones. Resuming an environment process from an existing Session is also not implemented; the current loop deliberately requires a new empty Session.
 
-The next implementation work adds process bootstrap and moves the remaining agent/history defaults into typed configuration. See [Configuration direction](configuration.md) for those remaining policy values.
+The next implementation work moves the remaining agent/history defaults into typed configuration. See [Configuration direction](configuration.md) for those remaining policy values.

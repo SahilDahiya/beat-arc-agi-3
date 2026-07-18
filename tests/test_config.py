@@ -19,7 +19,10 @@ def test_settings_accept_explicit_runtime_configuration() -> None:
     assert settings.sessions_root == Path.cwd() / "sessions"
 
 
-def test_settings_require_an_explicit_model() -> None:
+def test_settings_require_an_explicit_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("PYDANTIC_AI_MODEL", raising=False)
     with pytest.raises(ValidationError, match="pydantic_ai_model"):
         Settings(
             _env_file=None,
@@ -29,7 +32,10 @@ def test_settings_require_an_explicit_model() -> None:
         )
 
 
-def test_settings_require_an_explicit_sessions_root() -> None:
+def test_settings_require_an_explicit_sessions_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SESSIONS_ROOT", raising=False)
     with pytest.raises(ValidationError, match="sessions_root"):
         Settings(
             _env_file=None,

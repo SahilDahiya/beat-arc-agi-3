@@ -95,10 +95,12 @@ def test_loop_drops_queue_suffix_on_level_up_and_reasons_again(
         )
 
     session = create_session(tmp_path)
+    adapter = ArcGameAdapter(environment)
     result = asyncio.run(
         run_agent_loop(
             agent=build_agent(FunctionModel(model)),
-            adapter=ArcGameAdapter(environment),
+            adapter=adapter,
+            initial_observation=adapter.reset(),
             session=session,
             policy=LoopPolicy(max_turns=5, max_actions=5),
         )
@@ -134,10 +136,12 @@ def test_loop_honors_the_total_action_limit(tmp_path: Path) -> None:
             ]
         )
 
+    adapter = ArcGameAdapter(environment)
     result = asyncio.run(
         run_agent_loop(
             agent=build_agent(FunctionModel(model)),
-            adapter=ArcGameAdapter(environment),
+            adapter=adapter,
+            initial_observation=adapter.reset(),
             session=create_session(tmp_path),
             policy=LoopPolicy(max_turns=5, max_actions=1),
         )

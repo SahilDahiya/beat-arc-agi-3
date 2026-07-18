@@ -5,7 +5,7 @@ read_when: you are adding a module, tool, execution behavior, or dependency boun
 The canonical package is `beat_arc_agi_3` under `src/`.
 
 ```text
-ARC environment --reset--> GameObservation
+ARC environment creation/reset --> GameObservation
                               |
                          agent loop <--------------------+
                          /       \                       |
@@ -32,3 +32,5 @@ Python owns all harness semantics. The current agent has one read-only function 
 `JsonlTimeline` is a single-writer log. It validates the complete persisted sequence once when opened, retains the validated sequence in memory, and appends each new action result in O(1) without reparsing old grids. The initial observation is stored once; each later record stores only the executed action and resulting observation. Full before/after `Transition` values and terminal flags are derived in memory. `TimelineHistoryReader` formats only bounded evidence from that validated source.
 
 The ARC adapter is a separate boundary. It translates a validated `ArcAction` into the toolkit's `GameAction`, passes click coordinates through the wrapper's separate `data` argument, and applies exactly one action when the loop asks it to.
+
+`run_process` is the production composition root. It creates Arcade in the explicitly selected operation mode, requires the SDK's initial observation, creates a Session bound to the resolved versioned game ID, constructs the configured model and agent, and starts the bounded loop. ARC's environment wrappers reset eagerly during creation, so the loop receives that observation explicitly and does not issue a redundant reset.

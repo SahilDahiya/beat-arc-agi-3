@@ -19,7 +19,9 @@ The repository currently retains a small set of bounded policy defaults while pr
 
 These values are useful starting policies, not permanent constants. During the configurable agent-and-loop work, move them into validated typed configuration and pass that configuration explicitly through process composition.
 
-`LoopPolicy` now requires explicit maximum turn and action counts. Process configuration still needs game selection, create-versus-open mode, and process bootstrap. Missing required process values must fail before a model request or environment action.
+`ProcessConfig` requires the game ID, session label, timezone-aware start time, Arcade operation mode, maximum turns, and maximum actions. It derives the storage ID as `<UTC timestamp>-<session label>`, using microsecond precision. `run_process` is the canonical composition root for a new Session. It resolves the real versioned game ID from Arcade before creating that Session. Missing or invalid values fail before the model request and agent-driven action; environment creation failure and a missing initial observation fail without substitutes.
+
+The current process supports only creation of a new Session. The `python -m beat_arc_agi_3 run` command requires the game, reusable session label, operation mode, and both budgets as command-line arguments; it captures the start time once in UTC. Explicit open/resume behavior remains future work.
 
 ## Loop policy boundary
 
@@ -57,3 +59,7 @@ Settings + AgentPolicy + LoopPolicy
           |        |        |
         model    agent    Session
 ```
+
+## Test side effects
+
+The default `uv run pytest` invocation includes `paid_integration`. That test requires both configured API keys, uses `PYDANTIC_AI_MODEL`, creates an online Arcade environment, makes a paid model request, and executes one real ARC action. The marker documents the test; it does not skip it. Unavailable credentials or services fail the suite by design.

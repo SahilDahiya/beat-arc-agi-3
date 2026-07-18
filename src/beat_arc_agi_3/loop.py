@@ -39,6 +39,7 @@ async def run_agent_loop(
     *,
     agent: Agent[AgentDeps, CommitActions],
     adapter: ArcGameAdapter,
+    initial_observation: GameObservation,
     session: Session,
     policy: LoopPolicy,
 ) -> LoopResult:
@@ -49,7 +50,7 @@ async def run_agent_loop(
     if session.conversation.messages():
         raise ValueError("agent loop requires an empty session conversation")
 
-    current = adapter.reset()
+    current = initial_observation
     if current.game_id != session.metadata.game_id:
         raise ValueError(
             f"environment game {current.game_id} does not match "
