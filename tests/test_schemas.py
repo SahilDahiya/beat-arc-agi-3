@@ -2,7 +2,7 @@ import pytest
 from arcengine import FrameData, GameState
 from pydantic import ValidationError
 
-from beat_arc_agi_3.schemas import ActionDecision, GameObservation
+from beat_arc_agi_3.schemas import ActionDecision, CommitActions, GameObservation
 
 
 def test_observation_normalizes_frame_data() -> None:
@@ -61,3 +61,23 @@ def test_complex_action_converts_coordinates() -> None:
     assert action.name == "ACTION6"
     assert action.action_data.x == 12
     assert action.action_data.y == 31
+
+
+def test_action_coordinates_stay_inside_the_arc_grid() -> None:
+    with pytest.raises(ValidationError):
+        ActionDecision(
+            action="ACTION6",
+            x=64,
+            y=0,
+            reasoning="Outside the grid.",
+            confidence=0.1,
+        )
+
+
+def test_commit_requires_at_least_one_action() -> None:
+    with pytest.raises(ValidationError):
+        CommitActions(
+            actions=[],
+            reason="No action selected.",
+            suggestion="Continue reasoning.",
+        )
