@@ -1,0 +1,9 @@
+{
+  "game_id": "ls20-9607627b",
+  "provider": "claude",
+  "model": "claude-opus-4-8",
+  "max_actions": 3000,
+  "win_levels": 0,
+  "workdir": "~/agent-ls20",
+  "started_at": 1784313657.0922718
+}

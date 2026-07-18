@@ -1,0 +1,7 @@
+session_live/
+__pycache__/
+*.pyc
+control.json
+level_snapshots/
+~/agent-wa30/runtime/
+codex_cwd/

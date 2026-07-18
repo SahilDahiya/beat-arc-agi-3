@@ -1,0 +1,30 @@
+User-agent: *
+
+# klivescu's got a twiki installation in their home dir....
+Disallow: /klivescu/twiki/bin/attach.cgi
+Disallow: /klivescu/twiki/bin/changes.cgi
+Disallow: /klivescu/twiki/bin/edit.cgi
+Disallow: /klivescu/twiki/bin/geturl.cgi
+Disallow: /klivescu/twiki/bin/installpasswd.cgi
+Disallow: /klivescu/twiki/bin/mailnotify.cgi
+Disallow: /klivescu/twiki/bin/manage.cgi
+Disallow: /klivescu/twiki/bin/oops.cgi
+Disallow: /klivescu/twiki/bin/passwd.cgi
+Disallow: /klivescu/twiki/bin/preview.cgi
+Disallow: /klivescu/twiki/bin/rdiff.cgi
+Disallow: /klivescu/twiki/bin/rdiffauth.cgi
+Disallow: /klivescu/twiki/bin/register.cgi
+Disallow: /klivescu/twiki/bin/rename.cgi
+Disallow: /klivescu/twiki/bin/save.cgi
+Disallow: /klivescu/twiki/bin/savemulti.cgi
+Disallow: /klivescu/twiki/bin/search.cgi
+Disallow: /klivescu/twiki/bin/setlib.cfg.cgi
+Disallow: /klivescu/twiki/bin/statistics.cgi
+Disallow: /klivescu/twiki/bin/testenv.cgi
+Disallow: /klivescu/twiki/bin/configure.cgi
+Disallow: /klivescu/twiki/bin/upload.cgi
+Disallow: /klivescu/twiki/bin/viewauth.cgi
+Disallow: /klivescu/twiki/bin/viewfile.cgi
+
+Disallow: /paulfitz/cosmic/cosmic.0.9/bin/drawgate-ppm.pl
+

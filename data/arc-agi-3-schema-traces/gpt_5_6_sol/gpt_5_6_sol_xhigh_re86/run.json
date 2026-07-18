@@ -1,0 +1,9 @@
+{
+  "game_id": "re86-8af5384d",
+  "provider": "codex-cli",
+  "model": "gpt-5.6-sol",
+  "max_actions": 3000,
+  "win_levels": 0,
+  "workdir": "~/agent-re86",
+  "started_at": 1784424618.231352
+}

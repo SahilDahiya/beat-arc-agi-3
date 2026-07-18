@@ -1,0 +1,9 @@
+{
+  "game_id": "sp80-589a99af",
+  "provider": "claude",
+  "model": "claude-fable-5",
+  "max_actions": 3000,
+  "win_levels": 0,
+  "workdir": "~/agent-sp80",
+  "started_at": 1784497338.0582201
+}

@@ -1,0 +1,9 @@
+{
+  "game_id": "ft09-0d8bbf25",
+  "provider": "claude",
+  "model": "claude-fable-5",
+  "max_actions": 3000,
+  "win_levels": 0,
+  "workdir": "~/agent-ft09",
+  "started_at": 1784405528.3847837
+}

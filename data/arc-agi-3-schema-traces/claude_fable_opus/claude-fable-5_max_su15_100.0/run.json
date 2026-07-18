@@ -1,0 +1,9 @@
+{
+  "game_id": "su15-1944f8ab",
+  "provider": "claude",
+  "model": "claude-fable-5",
+  "max_actions": 3000,
+  "win_levels": 0,
+  "workdir": "~/agent-su15",
+  "started_at": 1784329939.182729
+}

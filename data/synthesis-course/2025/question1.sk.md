@@ -1,0 +1,6 @@
+---
+source: https://people.csail.mit.edu/asolar/SynthesisCourse/2025/question1.sk.html
+original_file: question1.sk.html
+---
+
+generator int exp([int nvars, int nconsts], int bnd, int[nvars] vars, int[nconsts] consts){ //In this generator, nvars is the number of variables and nconsts is the number of constants. //the array vars contains the values of all the variables and the array consts of all the constants. //Also note that you will probably need a separate generator for the boolean expressions. // The following example code can synthesize the functions out=x and out=1. // You should delete it and replace it with your implementation of the grammar. if (??) { return vars[0]; } return 1; } // You should be able to leave the rest of this file untouched int fun1([int nvars], int[nvars] vars){ return exp(3, vars, {}); // bound of 3, no constants } harness void experiment1(){ assert fun1({5,5})==15; assert fun1({8,3})==14; assert fun1({1234,227})==1688; } int fun2([int nvars], int[nvars] vars){ return exp(3, vars, {-1}); // bound of 3, -1 is only constant } harness void experiment2(){ assert fun2({10,7})==17; assert fun2({4,7})==-7; assert fun2({10,3})==13; assert fun2({1,-7})==-6; assert fun2({1,8})==-8; }

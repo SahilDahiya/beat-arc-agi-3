@@ -1,0 +1,9 @@
+{
+  "game_id": "sk48-d8078629",
+  "provider": "claude",
+  "model": "claude-fable-5",
+  "max_actions": 3000,
+  "win_levels": 0,
+  "workdir": "~/agent-sk48",
+  "started_at": 1784329940.5163643
+}

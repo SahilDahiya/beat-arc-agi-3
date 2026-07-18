@@ -1,0 +1,705 @@
+import numpy as np
+from collections import deque
+# (reinstall v20 — piece2 g=5 TERMINAL: tip consumed, 6 connectors. TOTAL=16 EVEN.)
+
+# ================= GAME MODEL =================
+# A level = rigid PIECES on a 20x20 block lattice (block = 3x3 cells, lattice offset (2,2)).
+# A piece is a connected shape; its CONNECTORS are exactly its degree-1 TERMINAL cells
+# (verified on every piece of levels 0,1,2).
+# Exactly one piece is ACTIVE (= movable). Actions 1-4 translate it 1 block, 5 rotates it
+# 90deg CW anchored at its bbox TOP-LEFT, 6 (click) makes the clicked piece active.
+# PIECES DO NOT COLLIDE AT ALL: they pass straight through each other. Only the board edge
+#   blocks a move. (My old "blocked unless connector-on-connector" rule was wrong from level 0,
+#   and was never exercised because every route I planned obeyed it.)
+# Two coincident connectors render colour 3 ("bonded"); bonds are NOT persistent.
+# GOAL: every connector is BONDED (paired with another connector) or BURIED under another
+#   piece's BODY. Levels 0-3 = the all-bonded special case; level 4 needs two buried.
+#
+# TWO RENDERING MODES (detected from ENTRY_GRID):
+#   PLAIN (levels 0,1): active piece's body -> colour 0; other pieces -> their true colour;
+#                       every connector visible as 8 (or 3 when bonded).
+#   MASK  (level 2)   : active piece -> its TRUE colour, connectors visible as 8;
+#                       INACTIVE pieces -> entirely MASK_COLOR 4, connectors HIDDEN.
+#   -> in MASK mode a masked piece's true colour cannot be read from ENTRY_GRID; it is only
+#      revealed by activating it. Learned values live in LEARNED_COLORS.
+
+S, OX, OY = 3, 2, 2
+NBX = (64 - OX) // S
+NBY = (64 - OY) // S
+
+SEL_COLOR   = 0          # also the colour of a ZCELL when its piece is ACTIVE
+# !! NO PIECE-PIECE COLLISIONS EXIST. Only the board edge blocks a move. (Probed level 4:
+#    MARK-on-BODY and BODY-on-BODY are both legal — pieces pass through each other.)
+MARK_COLOR  = 8
+DOCK_COLOR  = 3          # a BOND is strictly PAIRWISE: exactly 2 coincident connectors.
+                         # 3+ connectors on one cell is LEGAL (not blocked) but does NOT bond
+                         # -- it renders 8. Confirmed at (5,7) in level 4.
+MASK_COLOR  = 4
+HIDDEN_TRUE = 15          # true colour of the PLAIN-mode initially-active piece
+PALETTE = [15, 14, 11, 10, 9, 6, 7, 5, 2, 1, 13]
+# level -> {piece_idx: true colour}. A MASKED piece's colour cannot be read from ENTRY_GRID;
+# it is only revealed by activating it, so these are filled in as they are observed.
+# Piece palette appears to be {15,14,11,10,9} minus the background, but the ORDER is not
+# predictable (L1 piece0..3 = 15,14,11,9 in index order; L2 = 11,14,15 REVERSED) -> just learn them.
+LEARNED_COLORS = {2: {2: 15, 0: 11},
+                  4: {(0,2): 2,
+            (1,1): 1,
+            (1,2): 1,
+            (1,6): 3,
+            (2,0): 2,
+            (2,1): 1,
+            (2,6): 1,
+            (3,1): 1,
+            (3,6): 1,
+            (4,1): 1,
+            (4,2): 1,
+            (4,3): 1,
+            (4,4): 1,
+            (4,5): 1,
+            (4,6): 1,
+            (5,1): 2,
+            (5,6): 2},
+        3: {1: 14, 2: 12, 3: 11},
+                  4: {0: 10, 2: 14, 3: 12},
+                  5: {4: 15, 1: 12, 2: 11}}
+# A masked piece's CONNECTORS are also unknowable (level 4 proves the leaf-fallback wrong in
+# general). Override them here as they are observed by activating the piece.
+# level -> {piece_idx: [(y,x), ...]}   (indices are ENTRY-grid coords)
+LEARNED_CONNECTORS = {   # level -> {piece_idx: [(y,x)...]} in ENTRY BLOCK coords, read by
+    5: {4: [(14, 11), (14, 13), (17, 9)],    # activating the piece (masked pieces hide their 8s)
+        1: [(3, 15), (4, 17)],
+        2: [(6, 8), (8, 6)]},
+}
+LEARNED_ZCELLS = {       # a MASKED piece's ZCELL renders as mask-colour and is INVISIBLE in
+    5: {4: [(18, 12)],   # ENTRY_GRID -- it can only be seen by activating the piece. A ZCELL
+        2: [(10, 7)]},   # means that piece GROWS on action 5 instead of rotating.
+}                        # means that piece GROWS on action 5 instead of rotating.
+# NB colour 12 IS a valid piece colour (level-3 piece2) even though it was the BACKGROUND in
+# levels 1-2 -> the piece palette is not a small fixed set; only the current bg is excluded.
+
+BODY, MARK, ZCELL = 1, 2, 3
+# ZCELL = a cell rendered colour 0 in MASK mode (new in level 4). It is a **HOLE**: it is
+# PASSABLE — any other piece's cell may sit on it (CONFIRMED: piece3's connector entered the
+# ZCELL at (7,8), which my old solid-BODY rule wrongly blocked). It does NOT bond (that cell
+# rendered 8, not 3). Rendered 0 when its piece is active, 4 when masked.
+# sandbox: globals() and next() are NOT available -- use try/except NameError + explicit loops
+# !! run_python writes to this file do NOT reinstall the live model. Only write_file/edit_file do.
+HUD_Y, HUD_X0, HUD_N = 0, 16, 32
+HUD_FULL, HUD_USED = 4, 0
+DELTA = {1: (-1, 0), 2: (1, 0), 3: (0, -1), 4: (0, 1)}
+ROT, CLICK = 5, 6
+
+
+# Per-level move budget, FITTED from the observed bar (used = round(32*m/B)):
+#   L0 -> [74,75]   L1 -> exactly 100   L2 -> [123,128]   L3 -> [65,128] (2 obs so far)
+# The old formula 75+25*level (=150 for L3) is REFUTED: L3's bar forces B <= 128.
+# Budgets are non-decreasing and L2 >= 123, so L3 is in [123,128] -> 125.
+# The model also narrows an exact [lo,hi] from every observation and clamps this guess into it.
+LEARNED_BUDGET = {0: 75, 1: 100, 2: 125, 3: 125, 4: 150, 5: 200}
+
+
+def _lvl():
+    try:
+        return int(CURRENT_LEVEL or 0)
+    except (NameError, TypeError):
+        return 0
+
+
+def _budget_guess():
+    return LEARNED_BUDGET.get(_lvl(), 125)
+
+
+def _hud_used(m, B):
+    return min((64 * m + B) // (2 * B), HUD_N)
+
+
+def _narrow(lo, hi, m, u):
+    if m <= 0:
+        return lo, hi
+    lo = max(lo, 64 * m // (2 * u + 1) + 1)
+    if u >= 1:
+        hi = min(hi, 64 * m // (2 * u - 1))
+    return lo, hi
+
+
+def _blocks(grid):
+    g = np.array(grid, dtype=int)
+    return g, g[OY:OY + NBY * S:S, OX:OX + NBX * S:S].copy()
+
+
+def _components(B, bg):
+    seen = np.zeros(B.shape, dtype=bool)
+    out = []
+    for y in range(NBY):
+        for x in range(NBX):
+            if B[y, x] != bg and not seen[y, x]:
+                q = deque([(y, x)])
+                seen[y, x] = True
+                cs = []
+                while q:
+                    cy, cx = q.popleft()
+                    cs.append((cy, cx))
+                    for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                        ny, nx = cy + dy, cx + dx
+                        if 0 <= ny < NBY and 0 <= nx < NBX and B[ny, nx] != bg and not seen[ny, nx]:
+                            seen[ny, nx] = True
+                            q.append((ny, nx))
+                out.append(cs)
+    return out
+
+
+_CACHE = {}
+
+
+def _entry_info():
+    try:
+        eg = ENTRY_GRID
+    except NameError:
+        return None
+    if eg is None:
+        return None
+    g = np.asarray(eg, dtype=int)
+    ck = (g.tobytes(), _lvl())
+    if ck in _CACHE:
+        return _CACHE[ck]
+
+    _, B = _blocks(g)
+    v, c = np.unique(B, return_counts=True)
+    bg = int(v[np.argmax(c)])
+    comps = sorted(_components(B, bg), key=lambda cc: min(cc))
+    masked_exists = False
+    for cc in comps:
+        allmask = True
+        for (y, x) in cc:
+            if B[y, x] != MASK_COLOR:
+                allmask = False
+                break
+        if allmask:
+            masked_exists = True
+            break
+    plain = not masked_exists
+
+    pieces = []
+    for cc in comps:
+        Sset = set(cc)
+        # CONNECTORS are a DESIGNED subset of the piece, marked colour 8 -- NOT simply every
+        # degree-1 leaf (level-3 piece0 has 4 leaves but only 2 connectors).  When the piece is
+        # ACTIVE its 8s are visible, so read them.  When MASKED they are hidden; every masked
+        # piece seen so far has exactly 2 leaves and both are connectors, so fall back to leaves.
+        leaves = {p for p in Sset
+                  if sum(((p[0] + d[0], p[1] + d[1]) in Sset)
+                         for d in ((1, 0), (-1, 0), (0, 1), (0, -1))) == 1}
+        eights = {p for p in Sset if B[p] == MARK_COLOR}
+        zeros = {p for p in Sset if B[p] == SEL_COLOR} if not plain else set()
+        lz = LEARNED_ZCELLS.get(_lvl(), {}).get(len(pieces))
+        if lz is not None:
+            zeros = {tuple(p) for p in lz}     # observed by activating this (masked) piece
+        term = eights if eights else leaves
+        lc = LEARNED_CONNECTORS.get(_lvl(), {}).get(len(pieces))
+        if lc is not None:
+            term = {tuple(p) for p in lc}          # observed by activating this piece
+        ys = [y for y, _ in cc]
+        xs = [x for _, x in cc]
+        y0, x0 = min(ys), min(xs)
+        pat = np.zeros((max(ys) - y0 + 1, max(xs) - x0 + 1), dtype=int)
+        for p in Sset:
+            pat[p[0] - y0, p[1] - x0] = MARK if p in term else (ZCELL if p in zeros else BODY)
+        bodycols = {int(B[p]) for p in (Sset - term - zeros)}
+        col = bodycols.pop() if len(bodycols) == 1 else None
+        pieces.append({"col": col, "r0": y0, "c0": x0,
+                       "oris": [np.rot90(pat, k=-k) for k in range(4)],
+                       "shows8": any(B[p] == MARK_COLOR for p in term)})
+
+    # who is ACTIVE at entry?
+    sel0 = None
+    if plain:
+        for i, p in enumerate(pieces):
+            if p["col"] == SEL_COLOR:
+                sel0 = i
+                pieces[i]["col"] = HIDDEN_TRUE     # real colour hidden by the highlight
+                break
+    else:
+        for i, p in enumerate(pieces):
+            if p["shows8"]:
+                sel0 = i
+                break
+
+    # masked pieces: true colour unknowable from ENTRY_GRID -> use learned, else palette
+    learned = LEARNED_COLORS.get(_lvl(), {})
+    used = {p["col"] for p in pieces if p["col"] not in (None, MASK_COLOR)}
+    used |= set(learned.values())          # reserve learned colours BEFORE palette-filling
+    used.add(bg)                           # never guess the background colour
+    for i, p in enumerate(pieces):
+        if p["col"] in (None, MASK_COLOR) and not (plain and i == sel0):
+            if i in learned:
+                p["col"] = learned[i]
+            else:
+                for cand in PALETTE:
+                    if cand not in used:
+                        p["col"] = cand
+                        break
+            used.add(p["col"])
+
+    info = {"bg": bg, "pieces": pieces, "sel0": sel0, "mask": not plain}
+
+    # The piece carrying the ZCELL GROWS on action 5 (it never rotates), so for THAT piece the
+    # "orientation" index is reused as the GROWTH COUNT g. Replace its 4 rotations with the
+    # GROW_MAX+1 grown shapes.
+    zis = []
+    for i, p in enumerate(pieces):
+        if int((p["oris"][0] == ZCELL).sum()) > 0:
+            zis.append(i)
+    for zi in zis:
+        o0 = pieces[zi]["oris"][0]
+        base = {(a, b): int(o0[a, b])
+                for a in range(o0.shape[0]) for b in range(o0.shape[1]) if o0[a, b]}
+        grown = []
+        for g in range(GROW_MAX + 1):
+            s = _grow_shape(base, g, _lvl(), zi)
+            if s is None:
+                break
+            H = max(p[0] for p in s) + 1
+            W = max(p[1] for p in s) + 1
+            arr = np.zeros((H, W), dtype=int)
+            for p, v in s.items():
+                arr[p[0], p[1]] = v
+            grown.append(arr)
+        pieces[zi]["oris"] = grown
+    info["zis"] = zis
+    _CACHE[ck] = info
+    return info
+
+
+
+LEARNED_GROWN = {
+    # (level, piece_idx) -> {g: {(r, c): kind}}  -- shapes READ FROM FRAMES (kind 1=body,2=conn,3=tip)
+    (5, 2): {
+        5: {(0,2): 2, (0,5): 2, (0,6): 1, (1,1): 1, (1,2): 1, (1,6): 1, (1,7): 2, (2,0): 2, (2,1): 1, (2,6): 1, (3,1): 1, (3,6): 1, (4,1): 1, (4,2): 1, (4,3): 1, (4,4): 1, (4,5): 1, (4,6): 1, (5,1): 2, (5,6): 2},
+        4: {(0,2): 2, (1,1): 1, (1,2): 1, (1,6): 3, (2,0): 2, (2,1): 1, (2,6): 1, (3,1): 1, (3,6): 1, (4,1): 1, (4,2): 1, (4,3): 1, (4,4): 1, (4,5): 1, (4,6): 1, (5,1): 2, (5,6): 2},
+        1: {(0, 2): 2, (1, 1): 1, (1, 2): 1, (2, 0): 2, (2, 1): 1, (3, 1): 1,
+            (4, 1): 1, (4, 2): 1, (4, 3): 3, (5, 1): 2},
+        3: {(0,2): 2,
+            (1,1): 1,
+            (1,2): 1,
+            (2,0): 2,
+            (2,1): 1,
+            (3,1): 1,
+            (3,6): 3,
+            (4,1): 1,
+            (4,2): 1,
+            (4,3): 1,
+            (4,4): 1,
+            (4,5): 1,
+            (4,6): 1,
+            (5,1): 2,
+            (5,6): 2},
+        2: {(0,2): 2,
+            (1,1): 1,
+            (1,2): 1,
+            (2,0): 2,
+            (2,1): 1,
+            (3,1): 1,
+            (4,1): 1,
+            (4,2): 1,
+            (4,3): 1,
+            (4,4): 1,
+            (4,5): 3,
+            (5,1): 2},
+    },
+    (5, 4): {
+        1: {(0,2): 2,
+            (0,5): 2,
+            (1,2): 1,
+            (1,5): 1,
+            (2,1): 1,
+            (2,2): 1,
+            (2,5): 1,
+            (2,6): 1,
+            (3,0): 2,
+            (3,1): 1,
+            (3,6): 1,
+            (4,1): 1,
+            (4,2): 1,
+            (4,3): 1,
+            (4,4): 3,
+            (4,5): 1,
+            (4,6): 1},
+    },
+}
+
+
+GROW_MAX = 14
+
+
+def _grow_p4_l5(g):
+    # WIDENING dial. VERIFIED g=0,1,2 and the TERMINAL g=3 (tip consumed -> becomes BODY,
+    # growth stops). Max growth is 3 -- do NOT extrapolate past it.
+    g = min(g, 3)
+    s = {(0, 2): MARK, (1, 2): BODY, (2, 1): BODY, (2, 2): BODY,
+         (3, 0): MARK, (3, 1): BODY, (4, 1): BODY, (4, 2): BODY}
+    R = 4 + g
+    s[(0, R)] = MARK
+    s[(1, R)] = BODY
+    s[(2, R)] = BODY
+    s[(2, R + 1)] = BODY
+    s[(3, R + 1)] = BODY
+    s[(4, R)] = BODY
+    s[(4, R + 1)] = BODY
+    for c in range(3, 3 + g):
+        s[(4, c)] = BODY
+    s[(4, 3 + g)] = BODY if g == 3 else ZCELL     # g=3 CONSUMES the tip: growth terminates
+    return s
+
+
+def _grow_shape(base_cells, g, lvl=None, idx=None):
+    if (lvl, idx) == (5, 4):
+        return _grow_p4_l5(g)          # validated widening rule (g=0,1,2 all match frames)
+    tab = LEARNED_GROWN.get((lvl, idx))
+    if tab is not None:
+        if g == 0:
+            return dict(base_cells)
+        if g in tab:
+            return dict(tab[g])
+        return None            # unobserved growth -> unknown; caller keeps the largest known
+    return _grow_shape_arms(base_cells, g)
+
+
+def _grow_shape_arms(base_cells, g):
+    """The ZCELL piece GROWS instead of rotating (action 5): each growth appends a row whose arm
+    ends in a NEW CONNECTOR and advances the ZCELL tip one row.  Arms observed & verified from
+    the frames (g=0..4):  L1, R2->R4, L1, R3-final.  The LAST growth (g=4) consumes the ZCELL --
+    the piece is then COMPLETE (7 connectors) and cannot grow again."""
+    s = dict(base_cells)
+    zs = None
+    for p, v in s.items():
+        if v == ZCELL:
+            zs = p
+    if zs is None:
+        return s
+    del s[zs]
+    r, c = zs
+    # arm spec per growth step: (direction, body_len) ; direction -1 = left, +1 = right
+    ARMS = [(-1, 1), (1, 4), (-1, 1), (1, 3)]
+    n = min(g, len(ARMS))
+    for t in range(n):
+        d, ln = ARMS[t]
+        s[(r, c)] = BODY
+        if d < 0:
+            s[(r, c - 1)] = MARK
+        else:
+            for j in range(1, ln):
+                s[(r, c + j)] = BODY
+            s[(r, c + ln)] = MARK
+        r += 1
+    if n < len(ARMS):
+        s[(r, c)] = ZCELL          # tip survives -> can still grow
+    return s
+
+
+def _cells(info, i, pose):
+    k, r, c = pose
+    o = info["pieces"][i]["oris"][k]
+    return {(r + a, c + b): int(o[a, b])
+            for a in range(o.shape[0]) for b in range(o.shape[1]) if o[a, b]}
+
+
+def _zpiece(info):
+    """index of the piece carrying the ZCELL (it GROWS on action 5 and can never rotate)"""
+    for i, p in enumerate(info["pieces"]):
+        if int((p["oris"][0] == ZCELL).sum()) > 0:
+            return i
+    return None
+
+
+def _canvas(info, poses, sel):
+    """THE ACTIVE PIECE'S CELL IS DRAWN ON TOP (confirmed level 4): with piece1 active and
+    another piece's connector sitting on piece1's ZCELL, the cell rendered 0 (the ZCELL), not
+    the connector.  Conversely with piece3 active its connector on piece1's masked ZCELL showed 8.
+    Masked pieces render entirely MASK_COLOR, so a bond between two masked pieces is invisible."""
+    bg = info["bg"]
+    cv = np.full((NBY, NBX), bg, dtype=int)
+    conn = {}
+    for i, pose in enumerate(poses):
+        for p, k in _cells(info, i, pose).items():
+            if k == MARK:
+                conn.setdefault(p, []).append(i)
+    if info["mask"]:
+        for i, pose in enumerate(poses):          # masked pieces first
+            if i == sel:
+                continue
+            for p, k in _cells(info, i, pose).items():
+                cv[p] = MASK_COLOR
+        if sel is not None:                        # then the ACTIVE piece, ON TOP
+            for p, k in _cells(info, sel, poses[sel]).items():
+                if k == BODY:
+                    cv[p] = info["pieces"][sel]["col"]
+                elif k == ZCELL:
+                    cv[p] = SEL_COLOR
+                else:
+                    cv[p] = DOCK_COLOR if len(conn.get(p, [])) == 2 else MARK_COLOR
+    else:
+        for i, pose in enumerate(poses):
+            for p, k in _cells(info, i, pose).items():
+                if k == BODY:
+                    cv[p] = SEL_COLOR if i == sel else info["pieces"][i]["col"]
+                elif k == ZCELL:
+                    cv[p] = SEL_COLOR
+        for p, o in conn.items():
+            cv[p] = DOCK_COLOR if len(o) == 2 else MARK_COLOR
+    return cv, {p: len(o) for p, o in conn.items()}
+
+
+def _render(g, cv, m, B):
+    out = g.copy()
+    out[OY:OY + NBY * S, OX:OX + NBX * S] = np.kron(cv, np.ones((S, S), dtype=int))
+    used = _hud_used(m, B)
+    for i in range(HUD_N):
+        out[HUD_Y, HUD_X0 + i] = HUD_USED if i < used else HUD_FULL
+    return out
+
+
+def _find_piece_plain(B, info, i, selected):
+    """PLAIN mode only: locate piece i from the grid by its BODY colour."""
+    col = SEL_COLOR if selected else info["pieces"][i]["col"]
+    mask = np.zeros((NBY, NBX), dtype=int)
+    mask[B == col] = 1
+    for comp in _components(mask, 0):
+        oy = min(y for y, _ in comp)
+        ox = min(x for _, x in comp)
+        norm = frozenset((y - oy, x - ox) for (y, x) in comp)
+        for k, p in enumerate(info["pieces"][i]["oris"]):
+            z = [(a, b) for a in range(p.shape[0]) for b in range(p.shape[1]) if p[a, b] == BODY]
+            if len(z) != len(comp):
+                continue
+            zy = min(a for a, _ in z)
+            zx = min(b for _, b in z)
+            if frozenset((a - zy, b - zx) for (a, b) in z) == norm:
+                return (k, oy - zy, ox - zx)
+    return None
+
+
+def _parse_board(grid, info):
+    """Parse the ACTUAL board into (poses, sel).  REQUIRED because RESET RE-SCATTERS the pieces
+    to new positions -- it does NOT restore the entry layout -- so poses cannot be taken from
+    ENTRY_GRID.  Pieces are identified by matching each connected component's normalised shape
+    against the four known pieces x four orientations (all four sizes differ, so this is
+    unambiguous).  Only valid when pieces do not overlap (true at level start and after RESET)."""
+    _, Bg = _blocks(grid)              # _blocks -> (full 64x64, 20x20 BLOCK grid)
+    bg = info["bg"]
+    cells = {}
+    for y in range(NBY):
+        for x in range(NBX):
+            v = int(Bg[y][x])
+            if v != bg:
+                cells[(y, x)] = v
+    seen = set()
+    comps = []
+    for c in cells:
+        if c in seen:
+            continue
+        stack = [c]
+        comp = []
+        seen.add(c)
+        while stack:
+            p = stack.pop()
+            comp.append(p)
+            for d in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                q = (p[0] + d[0], p[1] + d[1])
+                if q in cells and q not in seen:
+                    seen.add(q)
+                    stack.append(q)
+        comps.append(comp)
+    n = len(info["pieces"])
+    poses = [None] * n
+    sel = None
+    for comp in comps:
+        r0 = min(p[0] for p in comp)
+        c0 = min(p[1] for p in comp)
+        shape = frozenset((p[0] - r0, p[1] - c0) for p in comp)
+        for i in range(n):
+            if poses[i] is not None:
+                continue
+            hit = False
+            for k in range(4):
+                o = info["pieces"][i]["oris"][k]
+                sh = frozenset((a, b) for a in range(o.shape[0]) for b in range(o.shape[1]) if o[a][b])
+                if sh == shape:
+                    poses[i] = (k, r0, c0)
+                    hit = True
+                    break
+            if hit:
+                # ACTIVE piece = the one NOT drawn in MASK_COLOR (mask mode)
+                if info["mask"]:
+                    ismask = True
+                    for p in comp:
+                        if cells[p] != MASK_COLOR:
+                            ismask = False
+                    if not ismask:
+                        sel = i
+                break
+    for i in range(n):
+        if poses[i] is None:
+            return None, None            # overlapping/unparseable -> caller keeps its own state
+    return poses, sel
+
+
+def init_state(entry_grid):
+    info = _entry_info()
+    if info is None:
+        return {"m": 0, "lo": 1, "hi": 10 ** 9, "sel": None, "poses": ()}
+    return {"m": 0, "lo": 1, "hi": 10 ** 9, "sel": info["sel0"],
+            "poses": tuple((0, p["r0"], p["c0"]) for p in info["pieces"])}
+
+
+
+def _bond_group(info, poses, sel):
+    """Pieces rigidly linked to `sel` through BONDS (2 coincident connectors).
+    ROTATION drags this whole group; TRANSLATION does not (it breaks the bonds)."""
+    n = len(poses)
+    conn = {}
+    for i in range(n):
+        for p, k in _cells(info, i, poses[i]).items():
+            if k == MARK:
+                conn.setdefault(p, []).append(i)
+    adj = {}
+    for i in range(n):
+        adj[i] = set()
+    for p in conn:
+        o = conn[p]
+        if len(o) == 2:
+            adj[o[0]].add(o[1])
+            adj[o[1]].add(o[0])
+    grp = set()
+    grp.add(sel)
+    stack = [sel]
+    while stack:
+        x = stack.pop()
+        for y in adj[x]:
+            if y not in grp:
+                grp.add(y)
+                stack.append(y)
+    return grp
+
+
+def predict(state, grid, action, x=None, y=None):
+    g, B = _blocks(grid)
+    info = _entry_info()
+    flags = {"level_up": False, "dead": False, "win": False}
+    m = int(state.get("m", 0))
+    poses = [tuple(p) for p in state.get("poses", ())]
+    sel = state.get("sel")
+
+    if info is None:
+        return g.tolist(), flags, dict(state, m=m + 1)
+
+    # RESET RE-SCATTERS the pieces to NEW positions -- it does NOT restore the entry layout.
+    # So on the first sight of a fresh state, derive poses/selection from the ACTUAL board
+    # rather than trusting ENTRY_GRID. (Also repairs the harness's first-transition skip.)
+    if not state.get("parsed"):
+        pp, ss = _parse_board(grid, info)
+        if pp is not None:
+            poses = [tuple(p) for p in pp]
+            if ss is not None:
+                sel = ss
+
+    # harness quirk: the GLOBAL FIRST transition is replayed without advancing state.
+    if m == 0 and not np.array_equal(g, np.asarray(ENTRY_GRID, dtype=int)):
+        m = 1
+        if not info["mask"]:
+            got = [_find_piece_plain(B, info, i, i == sel) for i in range(len(info["pieces"]))]
+            if all(p is not None for p in got):
+                poses = got
+
+    nm = m + 1
+    lo, hi = _narrow(int(state.get("lo", 1)), int(state.get("hi", 10 ** 9)), m,
+                     int(np.sum(g[HUD_Y, HUD_X0:HUD_X0 + HUD_N] != HUD_FULL)))
+    bud = min(max(_budget_guess(), lo), hi)
+
+    if action == CLICK and x is not None and y is not None:
+        by, bx = (int(y) - OY) // S, (int(x) - OX) // S
+        for i, pose in enumerate(poses):
+            if (by, bx) in _cells(info, i, pose):
+                sel = i
+                break
+    elif sel is not None and (action in DELTA or action == ROT):
+        # NO PIECE-PIECE COLLISIONS AT ALL: only the board edge blocks a move.
+        # ROTATION drags every piece BONDED to the active one (rigid group rotation about the
+        # GROUP's bbox top-left).  TRANSLATION moves ONLY the active piece and breaks the bonds.
+        # NOTE: a plain "rotation drags the bonded group" rule breaks 77 recorded transitions,
+        # so the drag is CONDITIONAL and not yet understood. Until it is pinned down, keep the
+        # verified single-piece dynamics and NEVER PLAN A MOVE OF A BONDED PIECE.
+        grp = [sel]
+        newposes = list(poses)
+        if action == ROT and sel in info.get("zis", []):
+            # ACTION 5 ON THE ZCELL PIECE = **GROW** (it never rotates).
+            # Cap PER PIECE at its last KNOWN stage -- growth beyond what I have actually
+            # observed is UNKNOWN, and must never be invented.
+            k, r, c = poses[sel]
+            gmax = len(info["pieces"][sel]["oris"]) - 1
+            newposes[sel] = (min(k + 1, gmax), r, c)
+        elif action in DELTA:
+            k, r, c = poses[sel]
+            newposes[sel] = (k, r + DELTA[action][0], c + DELTA[action][1])
+        else:
+            allc = []
+            for i in grp:
+                for p in _cells(info, i, poses[i]):
+                    allc.append(p)
+            R0 = min(p[0] for p in allc)
+            C0 = min(p[1] for p in allc)
+            H = max(p[0] for p in allc) - R0 + 1
+            for i in grp:
+                k, r, c = poses[i]
+                pts = []
+                for p in _cells(info, i, poses[i]):
+                    pts.append((R0 + (p[1] - C0), C0 + (H - 1 - (p[0] - R0))))
+                newposes[i] = ((k + 1) % 4, min(p[0] for p in pts), min(p[1] for p in pts))
+        ok = True
+        for i in grp:
+            for p in _cells(info, i, newposes[i]):
+                if not (0 <= p[0] < NBY and 0 <= p[1] < NBX):
+                    ok = False
+                    break
+            if not ok:
+                break
+        if ok:
+            poses = newposes
+
+    cv, conn = _canvas(info, poses, sel)
+    if _won(info, poses):
+        flags["level_up"] = True
+    ns = {"m": nm, "lo": lo, "hi": hi, "sel": sel, "poses": tuple(poses), "parsed": True}
+    return _render(g, cv, nm, bud).tolist(), flags, ns
+
+
+def _won(info, poses):
+    """WIN (both conditions -- the pair of predicates that survived the fit over all states):
+       (a) EVERY connector is BONDED: every connector cell holds exactly 2 connectors; AND
+       (b) NO TWO BODIES OVERLAP.
+    Proven on the board: an all-bonded config WITH body overlaps does NOT win, so (b) is real."""
+    conn = {}
+    body = {}
+    for i, pz in enumerate(poses):
+        for p, k in _cells(info, i, pz).items():
+            if k == MARK:
+                conn.setdefault(p, []).append(i)
+            elif k == BODY:
+                body.setdefault(p, []).append(i)
+    if not conn:
+        return False
+    for p in conn:
+        if len(conn[p]) != 2:
+            return False
+    for p in body:
+        if len(body[p]) > 1:
+            return False
+    return True
+
+
+def is_goal(state, grid):
+    if not state:
+        return False
+    poses = [tuple(p) for p in state.get("poses", [])]
+    if not poses:
+        return False
+    return _won(_entry_info(), poses)

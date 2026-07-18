@@ -1,0 +1,9 @@
+{
+  "game_id": "tu93-0768757b",
+  "provider": "claude",
+  "model": "claude-opus-4-8",
+  "max_actions": 3000,
+  "win_levels": 0,
+  "workdir": "~/agent-tu93",
+  "started_at": 1784184420.2623093
+}

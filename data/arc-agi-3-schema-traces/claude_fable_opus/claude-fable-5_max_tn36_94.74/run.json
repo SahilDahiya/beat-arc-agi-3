@@ -1,0 +1,9 @@
+{
+  "game_id": "tn36-ef4dde99",
+  "provider": "claude",
+  "model": "claude-fable-5",
+  "max_actions": 3000,
+  "win_levels": 0,
+  "workdir": "~/agent-tn36",
+  "started_at": 1784497338.149324
+}

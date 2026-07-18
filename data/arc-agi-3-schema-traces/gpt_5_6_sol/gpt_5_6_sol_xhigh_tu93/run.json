@@ -1,0 +1,9 @@
+{
+  "game_id": "tu93-0768757b",
+  "provider": "codex-cli",
+  "model": "gpt-5.6-sol",
+  "max_actions": 3000,
+  "win_levels": 0,
+  "workdir": "~/agent-tu93",
+  "started_at": 1784329937.295267
+}

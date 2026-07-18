@@ -1,0 +1,7 @@
+session_live/
+__pycache__/
+*.pyc
+control.json
+level_snapshots/
+~/agent-lp85/runtime/
+codex_cwd/

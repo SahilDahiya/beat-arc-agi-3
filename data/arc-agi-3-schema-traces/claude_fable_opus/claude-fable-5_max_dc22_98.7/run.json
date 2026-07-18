@@ -1,0 +1,9 @@
+{
+  "game_id": "dc22-fdcac232",
+  "provider": "claude",
+  "model": "claude-fable-5",
+  "max_actions": 3000,
+  "win_levels": 0,
+  "workdir": "~/agent-dc22",
+  "started_at": 1784402670.2507637
+}

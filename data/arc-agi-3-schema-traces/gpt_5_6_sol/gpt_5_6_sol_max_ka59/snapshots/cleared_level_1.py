@@ -1,0 +1,514 @@
+# General world model for ARC3 ka59.
+# np, ENTRY_GRID and CURRENT_LEVEL are supplied by the harness.
+
+DIRS = {1:(0,-3), 2:(0,3), 3:(-3,0), 4:(3,0)}
+
+def _components(mask):
+    h,w = mask.shape
+    seen = np.zeros((h,w), dtype=bool)
+    out = []
+    for y in range(h):
+        for x in range(w):
+            if not mask[y,x] or seen[y,x]:
+                continue
+            stack=[(x,y)]; seen[y,x]=True; pts=[]
+            while stack:
+                xx,yy=stack.pop(); pts.append((xx,yy))
+                for dx,dy in ((1,0),(-1,0),(0,1),(0,-1)):
+                    nx,ny=xx+dx,yy+dy
+                    if 0<=nx<w and 0<=ny<h and mask[ny,nx] and not seen[ny,nx]:
+                        seen[ny,nx]=True; stack.append((nx,ny))
+            out.append(pts)
+    return out
+
+def _entry_objects():
+    e=np.array(ENTRY_GRID,dtype=int)
+    ans=[]
+    for pts in _components(e==14):
+        xs=[p[0] for p in pts]; ys=[p[1] for p in pts]
+        x0,x1=min(xs),max(xs); y0,y1=min(ys),max(ys)
+        q=e[y0:y1+1,x0:x1+1]
+        inner=np.argwhere(q!=14)
+        if len(inner)==0:
+            continue
+        vals=set(int(q[y,x]) for y,x in inner)
+        if not vals <= {0,5} or len(vals)!=1:
+            continue
+        iy0,ix0=np.min(inner,axis=0); iy1,ix1=np.max(inner,axis=0)
+        block=q[iy0:iy1+1,ix0:ix1+1]
+        if not np.all(block==block[0,0]):
+            continue
+        # Everything outside the rectangular center block is color 14.
+        test=q.copy(); test[iy0:iy1+1,ix0:ix1+1]=14
+        if not np.all(test==14):
+            continue
+        ans.append({"x":x0,"y":y0,"w":x1-x0+1,"h":y1-y0+1,
+                    "cx":int(ix0),"cy":int(iy0),
+                    "cw":int(ix1-ix0+1),"ch":int(iy1-iy0+1),
+                    "val":int(block[0,0])})
+    ans.sort(key=lambda o:(o["y"],o["x"]))
+    return ans
+
+def _specs():
+    out=[]
+    for o in _entry_objects():
+        s=(o["w"],o["h"],o["cx"],o["cy"],o["cw"],o["ch"])
+        if s not in out:
+            out.append(s)
+    out.sort(key=lambda s:-(s[0]*s[1]))
+    return out
+
+def _scan_objects(a):
+    h,w=a.shape
+    found=[]
+    occupied=np.zeros((h,w),dtype=bool)
+    for sw,sh,cx,cy,cw,ch in _specs():
+        for y in range(h-sh+1):
+            for x in range(w-sw+1):
+                if np.any(occupied[y:y+sh,x:x+sw]):
+                    continue
+                q=a[y:y+sh,x:x+sw]
+                c=q[cy:cy+ch,cx:cx+cw]
+                if c.size==0 or not np.all(c==c.flat[0]):
+                    continue
+                val=int(c.flat[0])
+                if val not in (0,4,5):
+                    continue
+                outside=q.copy()
+                outside[cy:cy+ch,cx:cx+cw]=14
+                if val==0:
+                    # A selected object's travel-facing outer edge may also
+                    # be 0 while it is in contact.
+                    if not np.all((outside==14)|(outside==0)):
+                        continue
+                    if not np.any(outside==14):
+                        continue
+                else:
+                    if not np.all(outside==14):
+                        continue
+                o={"x":x,"y":y,"w":sw,"h":sh,"cx":cx,"cy":cy,
+                   "cw":cw,"ch":ch,"val":val}
+                found.append(o)
+                occupied[y:y+sh,x:x+sw]=True
+    found.sort(key=lambda o:(o["y"],o["x"]))
+    return found
+
+def _active(a):
+    for o in _scan_objects(a):
+        if o["val"]==0:
+            return o
+    return None
+
+def _frames():
+    e=np.array(ENTRY_GRID,dtype=int)
+    ans=[]
+    for pts in _components(e==4):
+        xs=[p[0] for p in pts]; ys=[p[1] for p in pts]
+        x0,x1=min(xs),max(xs); y0,y1=min(ys),max(ys)
+        w=x1-x0+1; h=y1-y0+1
+        if w<3 or h<3:
+            continue
+        q=e[y0:y1+1,x0:x1+1]
+        if (np.all(q[0,:]==4) and np.all(q[-1,:]==4) and
+            np.all(q[:,0]==4) and np.all(q[:,-1]==4) and
+            np.all(q[1:-1,1:-1]==1)):
+            ans.append({"x":x0,"y":y0,"w":w,"h":h,
+                        "ix":x0+1,"iy":y0+1,"iw":w-2,"ih":h-2})
+    ans.sort(key=lambda f:(f["y"],f["x"]))
+    return ans
+
+def _base():
+    b=np.array(ENTRY_GRID,dtype=int).copy()
+    for o in _entry_objects():
+        b[o["y"]:o["y"]+o["h"],o["x"]:o["x"]+o["w"]]=1
+    return b
+
+def _restore(a,o):
+    b=_base()
+    x,y,w,h=o["x"],o["y"],o["w"],o["h"]
+    a[y:y+h,x:x+w]=b[y:y+h,x:x+w]
+
+def _draw(a,o,x=None,y=None,val=None):
+    if x is None: x=o["x"]
+    if y is None: y=o["y"]
+    if val is None: val=o["val"]
+    a[y:y+o["h"],x:x+o["w"]]=14
+    a[y+o["cy"]:y+o["cy"]+o["ch"],
+      x+o["cx"]:x+o["cx"]+o["cw"]]=val
+
+def _paint_contacts(a,o):
+    # A selected object's whole face is black when any part is flush against
+    # another dynamic object.
+    x,y,w,h=o["x"],o["y"],o["w"],o["h"]
+    H,W=a.shape
+    def objpix(v):
+        return (v==14)|(v==0)|(v==5)
+    if x>0 and np.any(objpix(a[y:y+h,x-1])):
+        a[y:y+h,x]=0
+    if x+w<W and np.any(objpix(a[y:y+h,x+w])):
+        a[y:y+h,x+w-1]=0
+    if y>0 and np.any(objpix(a[y-1,x:x+w])):
+        a[y,x:x+w]=0
+    if y+h<H and np.any(objpix(a[y+h,x:x+w])):
+        a[y+h-1,x:x+w]=0
+
+def _rect_overlap(x,y,w,h,o):
+    return x < o["x"]+o["w"] and o["x"] < x+w and y < o["y"]+o["h"] and o["y"] < y+h
+
+def _mark_progress(a):
+    xs=np.where(a[-1]==4)[0]
+    if len(xs):
+        a[-1,int(xs[-1])]=0
+
+def _entry_active():
+    for o in _entry_objects():
+        if o["val"]==0:
+            return o
+    return None
+
+def _separator_axes():
+    # A separator axis is a color-15 run bounded by traversable terrain.
+    # Exterior color-15 regions are therefore ignored.
+    b=_base(); h,w=b.shape
+    vertical=False; horizontal=False
+    for y in range(h):
+        x=0
+        while x<w:
+            if int(b[y,x])!=15:
+                x+=1; continue
+            s=x
+            while x<w and int(b[y,x])==15:
+                x+=1
+            if s>0 and x<w and int(b[y,s-1]) in (1,4) and int(b[y,x]) in (1,4):
+                vertical=True
+    for x in range(w):
+        y=0
+        while y<h:
+            if int(b[y,x])!=15:
+                y+=1; continue
+            s=y
+            while y<h and int(b[y,x])==15:
+                y+=1
+            if s>0 and y<h and int(b[s-1,x]) in (1,4) and int(b[y,x]) in (1,4):
+                horizontal=True
+    return vertical,horizontal
+
+def _mark_walk_phase(a,newx,newy,action):
+    p0=_entry_active()
+    # The bar samples a checkerboard on the room-transition lattice.  Only
+    # coordinates along separator axes participate: L0 has x only, while L1
+    # has x and y, explaining why consecutive orthogonal moves can both mark.
+    if p0 is not None:
+        vx,hy=_separator_axes()
+        d=0
+        if vx: d += newx-p0["x"]
+        if hy: d += newy-p0["y"]
+        if not vx and not hy:
+            d=(newx-p0["x"])+(newy-p0["y"])
+        if d%6==3:
+            _mark_progress(a)
+
+def _find_separator(o,action):
+    b=_base(); h,w=b.shape
+    cx=o["x"]+o["w"]//2; cy=o["y"]+o["h"]//2
+    if action in (3,4):
+        step=1 if action==4 else -1
+        k=(o["x"]+o["w"]) if step>0 else (o["x"]-1)
+        # Skip ordinary traversable space to the first color-15 run.
+        while 0<=k<w and int(b[cy,k]) in (1,4):
+            k+=step
+        if not (0<=k<w and int(b[cy,k])==15):
+            return None
+        s=k
+        while 0<=k<w and int(b[cy,k])==15:
+            k+=step
+        e=k-step
+        if not (0<=k<w and int(b[cy,k]) in (1,4)):
+            return None
+        return min(s,e)+max(s,e)
+    else:
+        step=1 if action==2 else -1
+        k=(o["y"]+o["h"]) if step>0 else (o["y"]-1)
+        while 0<=k<h and int(b[k,cx]) in (1,4):
+            k+=step
+        if not (0<=k<h and int(b[k,cx])==15):
+            return None
+        s=k
+        while 0<=k<h and int(b[k,cx])==15:
+            k+=step
+        e=k-step
+        if not (0<=k<h and int(b[k,cx]) in (1,4)):
+            return None
+        return min(s,e)+max(s,e)
+
+def _reflect_object(o,action):
+    s=_find_separator(o,action)
+    if s is None:
+        return None
+    if action in (3,4):
+        return (s-(o["x"]+o["w"]-1),o["y"])
+    return (o["x"],s-(o["y"]+o["h"]-1))
+
+def _launch_train(hit,others,action):
+    # A struck passive object carries the impulse through the separator.  It
+    # gathers every passive in its lane ahead of it; on the far side the train
+    # packs against the first frame that intersects the leading object's lane.
+    s=_find_separator(hit,action)
+    if s is None:
+        return None
+    train=[hit]
+    changed=True
+    while changed:
+        changed=False
+        for o in others:
+            if o in train:
+                continue
+            if action in (3,4):
+                overlap=any(o["y"] < q["y"]+q["h"] and q["y"] < o["y"]+o["h"] for q in train)
+                ahead=(o["x"]<hit["x"]) if action==3 else (o["x"]>hit["x"])
+            else:
+                overlap=any(o["x"] < q["x"]+q["w"] and q["x"] < o["x"]+o["w"] for q in train)
+                ahead=(o["y"]<hit["y"]) if action==1 else (o["y"]>hit["y"])
+            if overlap and ahead:
+                train.append(o); changed=True
+    if action==3:
+        train.sort(key=lambda o:o["x"])
+    elif action==4:
+        train.sort(key=lambda o:-(o["x"]+o["w"]))
+    elif action==1:
+        train.sort(key=lambda o:o["y"])
+    else:
+        train.sort(key=lambda o:-(o["y"]+o["h"]))
+    lead=train[0]
+    frames=[]
+    for f in _frames():
+        if action==3:
+            side=f["x"]+f["w"]-1 < s/2
+            cross=f["y"] <= lead["y"]+lead["h"]-1 and lead["y"] <= f["y"]+f["h"]-1
+        elif action==4:
+            side=f["x"] > s/2
+            cross=f["y"] <= lead["y"]+lead["h"]-1 and lead["y"] <= f["y"]+f["h"]-1
+        elif action==1:
+            side=f["y"]+f["h"]-1 < s/2
+            cross=f["x"] <= lead["x"]+lead["w"]-1 and lead["x"] <= f["x"]+f["w"]-1
+        else:
+            side=f["y"] > s/2
+            cross=f["x"] <= lead["x"]+lead["w"]-1 and lead["x"] <= f["x"]+f["w"]-1
+        if side and cross:
+            frames.append(f)
+    if not frames:
+        # A lone projectile without a frame still mirrors through the portal.
+        if len(train)==1:
+            p=_reflect_object(hit,action)
+            return [(hit,p[0],p[1])] if p is not None else None
+        return None
+    if action==3:
+        f=max(frames,key=lambda q:q["x"]+q["w"])
+        cursor=f["x"]+f["w"]-1
+        placed=[]
+        for o in train:
+            placed.append((o,cursor,o["y"])); cursor+=o["w"]
+    elif action==4:
+        f=min(frames,key=lambda q:q["x"])
+        cursor=f["x"]
+        placed=[]
+        for o in train:
+            nx=cursor-o["w"]+1
+            placed.append((o,nx,o["y"])); cursor=nx
+    elif action==1:
+        f=max(frames,key=lambda q:q["y"]+q["h"])
+        cursor=f["y"]+f["h"]-1
+        placed=[]
+        for o in train:
+            placed.append((o,o["x"],cursor)); cursor+=o["h"]
+    else:
+        f=min(frames,key=lambda q:q["y"])
+        cursor=f["y"]
+        placed=[]
+        for o in train:
+            ny=cursor-o["h"]+1
+            placed.append((o,o["x"],ny)); cursor=ny
+    return placed
+
+def init_state(entry_grid):
+    obs=_entry_objects()
+    return {"objects":[{"x":o["x"],"y":o["y"],"w":o["w"],"h":o["h"],
+                         "val":o["val"],"phase":0,"launched":False} for o in obs]}
+
+def _copy_state(state):
+    if state is None or "objects" not in state:
+        return init_state(ENTRY_GRID)
+    return {"objects":[dict(o) for o in state["objects"]]}
+
+def _state_index(state,o):
+    for i,q in enumerate(state["objects"]):
+        if q["x"]==o["x"] and q["y"]==o["y"] and q["w"]==o["w"] and q["h"]==o["h"]:
+            return i
+    return None
+
+def _sync_active_index(state,o):
+    i=_state_index(state,o)
+    if i is not None:
+        return i
+    # Backtest's first-ever transition has no prior frame and is unscored.
+    # Recover the selected identity/phase from its displacement since the
+    # initialized state, then continue exact state tracking.
+    cand=[]
+    for j,q in enumerate(state["objects"]):
+        if q["val"]==0 and q["w"]==o["w"] and q["h"]==o["h"]:
+            cand.append((abs(q["x"]-o["x"])+abs(q["y"]-o["y"]),j))
+    if not cand:
+        return None
+    i=min(cand)[1]; q=state["objects"][i]
+    vx,hy=_separator_axes()
+    turns=0
+    if vx: turns += (o["x"]-q["x"])//3
+    if hy: turns += (o["y"]-q["y"])//3
+    q["phase"]=(q["phase"]+turns)%2
+    q["x"]=o["x"]; q["y"]=o["y"]
+    return i
+
+def _attempt_phase(a,state,i,action):
+    if i is None:
+        return 0
+    vx,hy=_separator_axes()
+    toggle=((action in (3,4) and vx) or (action in (1,2) and hy) or
+            (not vx and not hy))
+    cand=state["objects"][i]["phase"]
+    if toggle:
+        cand=1-cand
+    if cand==1:
+        _mark_progress(a)
+    return cand
+
+def _goals_filled(a):
+    fs=_frames()
+    if not fs:
+        return False
+    obs=_scan_objects(a)
+    for f in fs:
+        ok=False
+        for o in obs:
+            if (o["val"] in (0,4) and o["x"]==f["ix"] and
+                o["y"]==f["iy"] and o["w"]==f["iw"] and o["h"]==f["ih"]):
+                ok=True; break
+        if not ok:
+            return False
+    return True
+
+def _finish(info):
+    if CURRENT_LEVEL==6:
+        info["win"]=True
+    else:
+        info["level_up"]=True
+
+def is_goal(grid):
+    return _goals_filled(np.array(grid,dtype=int))
+
+def predict(state,grid,action,x=None,y=None):
+    a=np.array(grid,dtype=int).copy()
+    st=_copy_state(state)
+    info={"level_up":False,"dead":False,"win":False}
+
+    if action==6:
+        obs=_scan_objects(a)
+        act=None
+        for oo in obs:
+            if oo["val"]==0:
+                act=oo
+                break
+        chosen=None
+        if x is not None and y is not None:
+            for o in obs:
+                if o["val"] in (4,5) and o["x"]<=x<o["x"]+o["w"] and o["y"]<=y<o["y"]+o["h"]:
+                    chosen=o; break
+        if act is not None and chosen is not None:
+            oldval=chosen["val"]
+            ai=_sync_active_index(st,act); ci=_state_index(st,chosen)
+            _draw(a,act,val=4)
+            _draw(a,chosen,val=0)
+            _paint_contacts(a,chosen)
+            if ai is not None: st["objects"][ai]["val"]=4
+            if ci is not None:
+                st["objects"][ci]["val"]=0
+                # Selecting a manually staged piece restarts its walking foot;
+                # a freshly launched passenger retains its carried phase.
+                if not st["objects"][ci].get("launched",False):
+                    st["objects"][ci]["phase"]=0
+            # Selecting a piece staged on the rim of its own matching frame
+            # emits a bar pulse (the ready-to-enter cue).
+            ready=False
+            b=_base()
+            for f in _frames():
+                if f["iw"]==chosen["w"] and f["ih"]==chosen["h"]:
+                    if (chosen["x"] < f["x"]+f["w"] and f["x"] < chosen["x"]+chosen["w"] and
+                        chosen["y"] < f["y"]+f["h"] and f["y"] < chosen["y"]+chosen["h"] and
+                        np.any(b[chosen["y"]:chosen["y"]+chosen["h"],
+                                 chosen["x"]:chosen["x"]+chosen["w"]]==4)):
+                        ready=True
+            if ready and ci is not None and st["objects"][ci].get("launched",False):
+                _mark_progress(a)
+        if _goals_filled(a):
+            _finish(info)
+        return a.tolist(),info,st
+
+    if action not in DIRS:
+        return a.tolist(),info,st
+    act=_active(a)
+    if act is None:
+        return a.tolist(),info,st
+    ai=_sync_active_index(st,act)
+    dx,dy=DIRS[action]
+    nx,ny=act["x"]+dx,act["y"]+dy
+
+    # Remove the selected object's old overlay before testing its destination.
+    temp=a.copy(); _restore(temp,act)
+    others=[o for o in _scan_objects(a) if not (o["x"]==act["x"] and o["y"]==act["y"] and o["w"]==act["w"] and o["h"]==act["h"] and o["val"]==0)]
+    hit=None
+    for o in others:
+        if _rect_overlap(nx,ny,act["w"],act["h"],o):
+            hit=o; break
+
+    if hit is not None:
+        # Collision launches a lane of passive objects through the separator;
+        # the selected object stays put and its contact face closes.
+        placed=_launch_train(hit,others,action)
+        if placed is not None:
+            ids=[_state_index(st,oo) for oo,px,py in placed]
+            for oo,px,py in placed:
+                _restore(temp,oo)
+            _draw(temp,act,val=0)
+            for k,(oo,px,py) in enumerate(placed):
+                _draw(temp,oo,x=px,y=py,val=oo["val"])
+                if ids[k] is not None:
+                    st["objects"][ids[k]]["x"]=px
+                    st["objects"][ids[k]]["y"]=py
+                    st["objects"][ids[k]]["launched"]=True
+            # The pusher does not move, so its stored phase is unchanged;
+            # feedback uses the phase of the attempted stride.
+            _attempt_phase(temp,st,ai,action)
+            if _goals_filled(temp):
+                _finish(info)
+            return temp.tolist(),info,st
+        return a.tolist(),info,st
+
+    h,w=a.shape
+    if nx<0 or ny<0 or nx+act["w"]>w or ny+act["h"]>h:
+        return a.tolist(),info,st
+    destvals=temp[ny:ny+act["h"],nx:nx+act["w"]]
+    if not np.all((destvals==1)|(destvals==4)):
+        return a.tolist(),info,st
+
+    _draw(temp,act,x=nx,y=ny,val=0)
+
+    moved=act.copy(); moved["x"]=nx; moved["y"]=ny
+    _paint_contacts(temp,moved)
+    cand=_attempt_phase(temp,st,ai,action)
+    if ai is not None:
+        st["objects"][ai]["x"]=nx
+        st["objects"][ai]["y"]=ny
+        st["objects"][ai]["phase"]=cand
+        st["objects"][ai]["launched"]=False
+    if _goals_filled(temp):
+        _finish(info)
+    return temp.tolist(),info,st

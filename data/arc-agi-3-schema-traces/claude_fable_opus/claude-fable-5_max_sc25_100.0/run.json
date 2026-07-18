@@ -1,0 +1,9 @@
+{
+  "game_id": "sc25-635fd71a",
+  "provider": "claude",
+  "model": "claude-fable-5",
+  "max_actions": 3000,
+  "win_levels": 0,
+  "workdir": "~/agent-sc25",
+  "started_at": 1784405528.4152055
+}

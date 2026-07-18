@@ -1,0 +1,65 @@
+def _player(grid):
+    a = np.array(grid)
+    ys, xs = np.where((a == 9) | (a == 4))
+    if len(xs) == 0:
+        return None
+    x0, x1, y0, y1 = int(xs.min()), int(xs.max()), int(ys.min()), int(ys.max())
+    if x1 - x0 > 2 or y1 - y0 > 2:
+        return None
+    cx, cy = (x0+x1)//2, (y0+y1)//2
+    return cx, cy
+
+def is_goal(grid):
+    return not np.any(np.array(grid) == 14)
+
+def _rendered_turns(grid):
+    a = np.array(grid)
+    entry = np.array(ENTRY_GRID)
+    bar = np.where(entry[-1] == 6)[0]
+    if len(bar) == 0:
+        return 0, bar
+    spent_pixels = int(np.sum(a[-1, bar] == 0))
+    # The bar is a nearest-integer rendering of a 50-turn counter.
+    best = min(range(51),
+               key=lambda n: abs(int(len(bar)*n/50.0 + 0.5) - spent_pixels))
+    return best, bar
+
+def step(grid, action, x=None, y=None):
+    a = np.array(grid, dtype=int).copy()
+    info = {"level_up": False, "dead": False, "win": False}
+    delta = {1:(0,-6), 2:(0,6), 3:(-6,0), 4:(6,0)}
+    lead = {1:(0,-1), 2:(0,1), 3:(-1,0), 4:(1,0)}
+    p = _player(a)
+
+    if p is not None and action in delta:
+        px, py = p
+        dx, dy = delta[action]
+        tx, ty = px + dx, py + dy
+        mx, my = px + dx//2, py + dy//2
+        h, w = a.shape
+        if (0 <= tx < w and 0 <= ty < h and
+            a[my, mx] == 2 and a[ty, tx] in (0, 14)):
+            goal = (a[ty, tx] == 14)
+            a[py-1:py+2, px-1:px+2] = 0
+            if goal:
+                info["level_up"] = True
+                if CURRENT_LEVEL == 8:
+                    info["win"] = True
+            else:
+                a[ty-1:ty+2, tx-1:tx+2] = 9
+                lx, ly = lead[action]
+                a[ty+ly, tx+lx] = 4
+
+    # Every input advances one logical turn.  The 64-pixel bar displays
+    # round(turns * 64 / 50), hence its nonuniform 1,2,1,1,1,2... drain.
+    turns, bar = _rendered_turns(grid)
+    turns += 1
+    if len(bar):
+        a[-1, bar] = 6
+        spent = int(len(bar)*turns/50.0 + 0.5)
+        if spent:
+            a[-1, bar[-spent:]] = 0
+
+    if not info["level_up"] and turns >= 50:
+        info["dead"] = True
+    return a.tolist(), info

@@ -1,0 +1,10 @@
+depth 1: layer=95 nodes=97 vetoed=0
+depth 2: layer=1048 nodes=1443 vetoed=0
+depth 3: layer=4000 nodes=24757 vetoed=0
+depth 4: layer=4000 nodes=181921 vetoed=0
+depth 5: layer=4000 nodes=315438 vetoed=0
+depth 6: layer=4000 nodes=403007 vetoed=0
+depth 7: layer=4000 nodes=525940 vetoed=0
+depth 8: layer=4000 nodes=653183 vetoed=0
+nodes: 655303
+PLAN: [[8, 33], [30, 34], [23, 39], [26, 50], [22, 47], [7, 41], [13, 46], [8, 54], [5, 57]]

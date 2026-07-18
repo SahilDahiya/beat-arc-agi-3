@@ -1,0 +1,9 @@
+{
+  "game_id": "bp35-0a0ad940",
+  "provider": "claude",
+  "model": "claude-fable-5",
+  "max_actions": 3000,
+  "win_levels": 0,
+  "workdir": "~/agent-bp35",
+  "started_at": 1784329938.5710566
+}

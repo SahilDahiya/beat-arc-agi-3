@@ -1,0 +1,285 @@
+import numpy as np
+
+
+def _components(a, excluded=(4,)):
+    h, w = a.shape
+    seen = set()
+    out = []
+    for y in range(h):
+        for x in range(w):
+            v = int(a[y, x])
+            if v in excluded or (x, y) in seen:
+                continue
+            stack = [(x, y)]
+            seen.add((x, y))
+            cells = []
+            while stack:
+                xx, yy = stack.pop()
+                cells.append((xx, yy))
+                for nx, ny in ((xx-1,yy),(xx+1,yy),(xx,yy-1),(xx,yy+1)):
+                    if 0 <= nx < w and 0 <= ny < h and (nx,ny) not in seen and int(a[ny,nx]) == v:
+                        seen.add((nx,ny)); stack.append((nx,ny))
+            out.append((v, cells))
+    return out
+
+
+def _layout():
+    a = np.array(ENTRY_GRID, dtype=int)
+    comps = _components(a)
+    tiles = []
+    small = []
+    large = []
+    for v, cells in comps:
+        xs = [p[0] for p in cells]; ys = [p[1] for p in cells]
+        box = (min(xs), min(ys), max(xs), max(ys))
+        bw, bh = box[2]-box[0]+1, box[3]-box[1]+1
+        if len(cells) == 16 and bw == 4 and bh == 4:
+            tiles.append((box[0], box[1], v))
+        elif len(cells) == 4 and bw == 2 and bh == 2:
+            small.append((box, v))
+        elif len(cells) > 16 and bw > 1 and bh > 1:
+            large.append((box, v, len(cells)))
+    xs = sorted(set(x for x,y,v in tiles))
+    ys = sorted(set(y for x,y,v in tiles))
+    xmin, xmax, ymin, ymax = min(xs), max(xs), min(ys), max(ys)
+    pos = {(x,y):v for x,y,v in tiles}
+    order = []
+    for x in xs:
+        if (x,ymin) in pos: order.append((x,ymin))
+    for y in ys[1:]:
+        if (xmax,y) in pos: order.append((xmax,y))
+    for x in reversed(xs[:-1]):
+        if (x,ymax) in pos: order.append((x,ymax))
+    for y in reversed(ys[1:-1]):
+        if (xmin,y) in pos: order.append((xmin,y))
+
+    # The four small corner marks identify the target tile and their color
+    # identifies the unique marker tile that must be rotated into it.
+    best = None
+    for tx, ty in order:
+        near = [(b,v) for b,v in small
+                if b[2] >= tx-3 and b[0] <= tx+6 and
+                   b[3] >= ty-3 and b[1] <= ty+6]
+        if best is None or len(near) > best[0]:
+            best = (len(near), (tx,ty), near)
+    target = best[1]
+    marker = best[2][0][1] if best[2] else pos[target]
+
+    # The two wide components outside the tile rectangle are arrow buttons.
+    left = right = None
+    for box,v,n in large:
+        if box[3] < ymin or box[1] > ymax+3: continue
+        if box[2] < xmin:
+            left = box
+        elif box[0] > xmax+3:
+            right = box
+    return order, target, marker, left, right
+
+
+def _inside(box, x, y):
+    return box is not None and x is not None and y is not None and box[0] <= x <= box[2] and box[1] <= y <= box[3]
+
+
+def _layout1():
+    a = np.array(ENTRY_GRID, dtype=int)
+    comps = _components(a)
+    tiles = []
+    small = []
+    arrows = []
+    for v,cells in comps:
+        xs=[p[0] for p in cells]; ys=[p[1] for p in cells]
+        box=(min(xs),min(ys),max(xs),max(ys))
+        bw=box[2]-box[0]+1; bh=box[3]-box[1]+1
+        if len(cells)==4 and bw==2 and bh==2:
+            tiles.append((box[0],box[1],v))
+        elif len(cells)==1:
+            small.append((box[0],box[1],v))
+        elif v in (8,14) and len(cells)>4 and bw>1 and bh>1:
+            arrows.append((box,v))
+    xs=sorted(set(x for x,y,v in tiles)); ys=sorted(set(y for x,y,v in tiles))
+    counts={x:sum(1 for xx,y,v in tiles if xx==x) for x in xs}
+    cols=sorted(sorted(xs,key=lambda x:counts[x],reverse=True)[:2])
+    xl,xr=cols; yt=min(ys); yb=max(ys)
+    have={(x,y) for x,y,v in tiles}
+    topxs=[x for x in xs if xl<=x<=xr and (x,yt) in have]
+    ring=[]
+    ring += [(x,yt) for x in topxs]
+    ring += [(xr,y) for y in ys[1:-1] if (xr,y) in have]
+    ring += [(x,yb) for x in reversed(topxs)]
+    ring += [(xl,y) for y in reversed(ys[1:-1]) if (xl,y) in have]
+    targets=[]
+    for tx,ty,v in tiles:
+        near=[(sx,sy,sv) for sx,sy,sv in small if tx-1<=sx<=tx+2 and ty-1<=sy<=ty+2]
+        if len(near)>=4:
+            targets.append((tx,ty))
+    marker = small[0][2] if small else 11
+    # Arrow pairs are indexed by their vertical row, top to bottom.
+    arrows=sorted(arrows,key=lambda z:(z[0][1],z[0][0]))
+    return tiles, ring, targets, marker, arrows
+
+
+def _step1(grid, x, y):
+    g=[row[:] for row in grid]
+    info={"level_up":False,"dead":False,"win":False}
+    tiles,ring,targets,marker,arrows=_layout1()
+    hit=None
+    for box,v in arrows:
+        if _inside(box,x,y): hit=(box,v); break
+    if hit is None:
+        return g,info
+    box,v=hit
+    # Right buttons rotate their track clockwise/right by one slot.
+    top_y=min(b[0][1] for b in arrows)
+    is_right = box[0] > 32
+    moved=False
+    if is_right and box[1] == top_y:
+        track=ring
+        moved=True
+    elif is_right:
+        row_y=box[1]+1
+        track=sorted([(tx,ty) for tx,ty,tv in tiles if ty==row_y])
+        moved=bool(track)
+    else:
+        track=[]  # left direction is not yet observed on this level
+    if moved:
+        old=[int(grid[py][px]) for px,py in track]
+        for i,(px,py) in enumerate(track):
+            val=old[(i-1)%len(track)]
+            for yy in range(py,py+2):
+                for xx in range(px,px+2): g[yy][xx]=val
+        # Level-1 meter is rasterized at 9 pixels per 8 effective presses:
+        # after seven single ticks the eighth press advances two cells.
+        filled=sum(1 for row in grid if row[0]==5)
+        ticks=2 if filled % 9 == 7 else 1
+        for yy in range(len(g)):
+            if g[yy][0]==14 and ticks>0:
+                g[yy][0]=5; ticks-=1
+    if targets and all(g[ty][tx]==marker for tx,ty in targets):
+        info["level_up"]=True
+    return g,info
+
+
+def _layout2():
+    a=np.array(ENTRY_GRID,dtype=int)
+    comps=_components(a)
+    tiles=[]; small=[]; buttons=[]
+    for v,cells in comps:
+        xs0=[p[0] for p in cells]; ys0=[p[1] for p in cells]
+        box=(min(xs0),min(ys0),max(xs0),max(ys0))
+        bw=box[2]-box[0]+1; bh=box[3]-box[1]+1
+        if len(cells)==4 and bw==2 and bh==2:
+            tiles.append((box[0],box[1],v))
+        elif len(cells)==1 and v in (11,12):
+            small.append((box[0],box[1],v))
+        elif v in (8,14) and len(cells)>4 and bw>1 and bh>1:
+            buttons.append((box,v))
+    xs=sorted(set(x for x,y,v in tiles)); ys=sorted(set(y for x,y,v in tiles))
+    # Two overlapping rounded-rectangle tracks, expressed by their lattice indices.
+    def P(ix,iy): return (xs[ix],ys[iy])
+    left=[P(2,0),P(3,0),P(4,0),P(5,1),P(6,2),P(6,3),P(6,4),P(5,5),
+          P(4,6),P(3,6),P(2,6),P(1,5),P(0,4),P(0,3),P(0,2),P(1,1)]
+    right=[P(6,0),P(7,0),P(8,0),P(9,1),P(10,2),P(10,3),P(10,4),P(9,5),
+           P(8,6),P(7,6),P(6,6),P(5,5),P(4,4),P(4,3),P(4,2),P(5,1)]
+    targets=[]
+    for tx,ty,tv in tiles:
+        near=[sv for sx,sy,sv in small if tx-1<=sx<=tx+2 and ty-1<=sy<=ty+2]
+        if len(near)>=4: targets.append((tx,ty,near[0]))
+    return tiles,[left,right],targets,buttons
+
+
+def _step2(grid,x,y,presses=0):
+    g=[row[:] for row in grid]
+    info={"level_up":False,"dead":False,"win":False}
+    tiles,cycles,targets,buttons=_layout2()
+    hit=None
+    for box,v in buttons:
+        if _inside(box,x,y): hit=(box,v); break
+    if hit is None: return g,info
+    box,v=hit
+    # Button pairs are beneath their corresponding left/right track.
+    ci=0 if (box[0]+box[2])//2 < 31 else 1
+    if v==14:  # e-colored/right button: clockwise
+        track=cycles[ci]
+        old=[int(grid[py][px]) for px,py in track]
+        for i,(px,py) in enumerate(track):
+            val=old[(i-1)%len(track)]
+            for yy in range(py,py+2):
+                for xx in range(px,px+2): g[yy][xx]=val
+        # Level 2 meter is the nearest-integer rasterization of 4/5 pixel per press.
+        old_fill=(4*presses + 2)//5
+        new_fill=(4*(presses+1) + 2)//5
+        ticks=new_fill-old_fill
+        for yy in range(len(g)):
+            if g[yy][0]==14 and ticks>0:
+                g[yy][0]=5; ticks-=1
+    # 8-colored/counterclockwise direction remains unneeded and unobserved.
+    if targets and all(g[ty][tx]==col for tx,ty,col in targets):
+        info["level_up"]=True
+    return g,info
+
+
+def _goal(grid):
+    order, target, marker, left, right = _layout()
+    x,y = target
+    return int(grid[y][x]) == marker
+
+
+def _core(grid, action, x=None, y=None, presses=0):
+    g = [row[:] for row in grid]
+    info = {"level_up": False, "dead": False, "win": False}
+    if action != 6:
+        return g, info
+    if CURRENT_LEVEL == 1:
+        return _step1(grid, x, y)
+    if CURRENT_LEVEL == 2:
+        return _step2(grid, x, y, presses)
+    order, target, marker, left, right = _layout()
+    direction = 0
+    if _inside(left, x, y): direction = -1   # each position receives next clockwise tile
+    if _inside(right, x, y): direction = 1
+    if direction == 0:
+        return g, info
+
+    old = [int(grid[py][px]) for px,py in order]
+    n = len(order)
+    for i,(px,py) in enumerate(order):
+        val = old[(i - direction) % n]
+        for yy in range(py,py+4):
+            for xx in range(px,px+4):
+                g[yy][xx] = val
+
+    # Each effective arrow press consumes one five-pixel unit of the left meter.
+    used = 0
+    for yy in range(len(g)):
+        if g[yy][0] == 14 and used < 5:
+            g[yy][0] = 5
+            used += 1
+
+    if _goal(g):
+        if CURRENT_LEVEL is not None and CURRENT_LEVEL >= 7:
+            info["win"] = True
+        else:
+            info["level_up"] = True
+    return g, info
+
+
+def init_state(entry_grid):
+    return {"presses": 0}
+
+
+def predict(state, grid, action, x=None, y=None):
+    presses=int((state or {}).get("presses",0))
+    g,info=_core(grid,action,x,y,presses)
+    changed=any(g[y][x] != grid[y][x] for y in range(len(g)) for x in range(len(g[0])))
+    ns={"presses": presses + (1 if action==6 and changed else 0)}
+    return g,info,ns
+
+
+def is_goal(grid):
+    if CURRENT_LEVEL == 1:
+        tiles,ring,targets,marker,arrows=_layout1()
+        return bool(targets) and all(grid[y][x]==marker for x,y in targets)
+    if CURRENT_LEVEL == 2:
+        tiles,cycles,targets,buttons=_layout2()
+        return bool(targets) and all(grid[y][x]==c for x,y,c in targets)
+    return _goal(grid)

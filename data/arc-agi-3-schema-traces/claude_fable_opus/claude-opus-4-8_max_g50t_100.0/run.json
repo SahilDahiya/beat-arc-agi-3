@@ -1,0 +1,9 @@
+{
+  "game_id": "g50t-5849a774",
+  "provider": "claude",
+  "model": "claude-opus-4-8",
+  "max_actions": 3000,
+  "win_levels": 0,
+  "workdir": "~/agent-g50t",
+  "started_at": 1784107226.1848636
+}

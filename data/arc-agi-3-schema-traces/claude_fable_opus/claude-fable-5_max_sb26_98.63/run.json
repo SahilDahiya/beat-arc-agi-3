@@ -1,0 +1,9 @@
+{
+  "game_id": "sb26-7fbdac44",
+  "provider": "claude",
+  "model": "claude-fable-5",
+  "max_actions": 3000,
+  "win_levels": 0,
+  "workdir": "~/agent-sb26",
+  "started_at": 1784405528.4054918
+}

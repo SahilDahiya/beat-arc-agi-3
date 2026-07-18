@@ -1,0 +1,7 @@
+session_live/
+__pycache__/
+*.pyc
+control.json
+level_snapshots/
+~/agent-m0r0/runtime/
+codex_cwd/

@@ -1,0 +1,7 @@
+session_live/
+__pycache__/
+*.pyc
+control.json
+level_snapshots/
+~/agent-ar25/runtime/
+codex_cwd/

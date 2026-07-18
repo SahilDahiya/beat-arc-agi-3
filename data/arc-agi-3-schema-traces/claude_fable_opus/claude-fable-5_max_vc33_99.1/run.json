@@ -1,0 +1,9 @@
+{
+  "game_id": "vc33-5430563c",
+  "provider": "claude",
+  "model": "claude-fable-5",
+  "max_actions": 3000,
+  "win_levels": 0,
+  "workdir": "~/agent-vc33",
+  "started_at": 1784402670.3797424
+}
