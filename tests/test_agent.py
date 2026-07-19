@@ -12,6 +12,7 @@ from beat_arc_agi_3.config import Settings
 from beat_arc_agi_3.dependencies import AgentDeps, HistoryQuery
 from beat_arc_agi_3.runner import deliberate, render_observation
 from beat_arc_agi_3.schemas import CommitActions, GameObservation
+from beat_arc_agi_3.workspace import ReadFileQuery
 
 
 models.ALLOW_MODEL_REQUESTS = False
@@ -24,6 +25,15 @@ class RecordingHistory:
     async def read(self, query: HistoryQuery) -> str:
         self.calls.append(query)
         return "#3 action=ACTION1; 4 cells changed"
+
+
+@dataclass
+class RecordingWorkspace:
+    calls: list[ReadFileQuery] = field(default_factory=list)
+
+    def read_file(self, query: ReadFileQuery) -> str:
+        self.calls.append(query)
+        return "notes.md (1 lines):\n1\tconfirmed"
 
 
 @dataclass
@@ -83,7 +93,10 @@ def test_agent_reads_history_then_returns_typed_commit() -> None:
     history = RecordingHistory()
 
     def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        assert [tool.name for tool in info.function_tools] == ["read_history"]
+        assert [tool.name for tool in info.function_tools] == [
+            "read_history",
+            "read_file",
+        ]
         assert [tool.name for tool in info.output_tools] == ["commit_actions"]
         if len(messages) == 1:
             return ModelResponse(
@@ -95,7 +108,11 @@ def test_agent_reads_history_then_returns_typed_commit() -> None:
             )
         return ModelResponse(parts=[ToolCallPart("commit_actions", commit_args())])
 
-    deps = AgentDeps(observation=observation(1, 6), history=history)
+    deps = AgentDeps(
+        observation=observation(1, 6),
+        history=history,
+        workspace=RecordingWorkspace(),
+    )
     conversation = MemoryConversation()
     result = asyncio.run(
         deliberate(build_agent(FunctionModel(model)), deps, conversation)
@@ -118,7 +135,11 @@ def test_successful_commit_skips_sibling_history_tool() -> None:
             ]
         )
 
-    deps = AgentDeps(observation=observation(1), history=history)
+    deps = AgentDeps(
+        observation=observation(1),
+        history=history,
+        workspace=RecordingWorkspace(),
+    )
     result = asyncio.run(
         deliberate(
             build_agent(FunctionModel(model)), deps, MemoryConversation()
@@ -140,7 +161,11 @@ def test_agent_retries_a_commit_with_an_unavailable_action() -> None:
             parts=[ToolCallPart("commit_actions", commit_args(action))]
         )
 
-    deps = AgentDeps(observation=observation(1), history=RecordingHistory())
+    deps = AgentDeps(
+        observation=observation(1),
+        history=RecordingHistory(),
+        workspace=RecordingWorkspace(),
+    )
     result = asyncio.run(
         deliberate(
             build_agent(FunctionModel(model)), deps, MemoryConversation()
@@ -159,7 +184,11 @@ def test_deliberation_reuses_session_message_history() -> None:
         return ModelResponse(parts=[ToolCallPart("commit_actions", commit_args())])
 
     agent = build_agent(FunctionModel(model))
-    deps = AgentDeps(observation=observation(1), history=RecordingHistory())
+    deps = AgentDeps(
+        observation=observation(1),
+        history=RecordingHistory(),
+        workspace=RecordingWorkspace(),
+    )
     conversation = MemoryConversation()
 
     asyncio.run(deliberate(agent, deps, conversation))
@@ -167,6 +196,36 @@ def test_deliberation_reuses_session_message_history() -> None:
 
     assert message_counts == [1, 3]
     assert len(conversation.messages()) == 6
+
+
+def test_agent_reads_a_workspace_file_then_commits() -> None:
+    workspace = RecordingWorkspace()
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if len(messages) == 1:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "read_file",
+                        {"path": "notes.md", "offset": 2, "limit": 10},
+                    )
+                ]
+            )
+        return ModelResponse(parts=[ToolCallPart("commit_actions", commit_args())])
+
+    deps = AgentDeps(
+        observation=observation(1),
+        history=RecordingHistory(),
+        workspace=workspace,
+    )
+    result = asyncio.run(
+        deliberate(build_agent(FunctionModel(model)), deps, MemoryConversation())
+    )
+
+    assert result.actions[0].action == "ACTION1"
+    assert workspace.calls == [
+        ReadFileQuery(path="notes.md", offset=2, limit=10)
+    ]
 
 
 def test_observation_renderer_is_compact_and_uses_hex_rows() -> None:

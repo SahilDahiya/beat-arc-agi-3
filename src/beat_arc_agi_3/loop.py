@@ -95,7 +95,11 @@ async def run_agent_loop(
 
         commit = await deliberate(
             agent,
-            AgentDeps(observation=current, history=history),
+            AgentDeps(
+                observation=current,
+                history=history,
+                workspace=session.workspace,
+            ),
             session.conversation,
             turn_context=turn_context,
         )

@@ -19,7 +19,8 @@ The implemented foundation now provides:
 11. Compose a complete real process from explicit settings and process configuration.
 12. Exercise that composition in the default test suite with a paid model request and a real online ARC action.
 13. Expose new-session process composition through `python -m beat_arc_agi_3 run` with explicit game, reusable session label, mode, and budget arguments; generated Session IDs are UTC timestamped.
+14. Expose the trace-derived Schema Harness `read_file(path, offset=1, limit=2000)` tool over UTF-8 files confined to the active Session.
 
-World-model editing, backtesting, search, model-misprediction queue cancellation, and competition submission integration remain later milestones. Resuming an environment process from an existing Session is also not implemented; the current loop deliberately requires a new empty Session.
+World-model writing/editing, backtesting, search, model-misprediction queue cancellation, and competition submission integration remain later milestones. Resuming an environment process from an existing Session is also not implemented; the current loop deliberately requires a new empty Session.
 
 The next implementation work moves the remaining agent/history defaults into typed configuration. See [Configuration direction](configuration.md) for those remaining policy values.

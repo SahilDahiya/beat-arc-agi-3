@@ -22,6 +22,7 @@ from beat_arc_agi_3.timeline import (
     JsonlTimeline,
     TimelineError,
 )
+from beat_arc_agi_3.workspace import SessionWorkspace
 
 
 SessionId = Annotated[
@@ -70,6 +71,7 @@ class Session:
     metadata: SessionMetadata
     timeline: JsonlTimeline
     conversation: JsonlConversation
+    workspace: SessionWorkspace
 
     @property
     def metadata_path(self) -> Path:
@@ -136,6 +138,7 @@ class Session:
             metadata=metadata,
             timeline=timeline,
             conversation=conversation,
+            workspace=SessionWorkspace(session_path),
         )
 
     @classmethod
@@ -188,6 +191,7 @@ class Session:
             metadata=metadata,
             timeline=timeline,
             conversation=conversation,
+            workspace=SessionWorkspace(session_path),
         )
 
     @staticmethod

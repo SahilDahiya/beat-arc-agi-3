@@ -4,6 +4,7 @@ from typing import Literal, Protocol
 from pydantic import BaseModel, ConfigDict, Field
 
 from beat_arc_agi_3.schemas import GameObservation
+from beat_arc_agi_3.workspace import WorkspaceReader
 
 
 HistoryDetail = Literal["brief", "full", "animation"]
@@ -28,3 +29,4 @@ class AgentDeps:
 
     observation: GameObservation
     history: HistoryReader
+    workspace: WorkspaceReader

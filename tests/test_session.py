@@ -29,6 +29,7 @@ def test_session_create_owns_metadata_and_timeline(tmp_path: Path) -> None:
     assert session.timeline.transitions() == ()
     assert session.conversation.path == session.path / "messages.jsonl"
     assert session.conversation.messages() == ()
+    assert session.workspace.root == session.path
 
 
 def test_session_reopens_the_same_validated_timeline(tmp_path: Path) -> None:
