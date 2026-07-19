@@ -6,7 +6,7 @@ from arcengine import FrameData, GameState
 from beat_arc_agi_3.dependencies import HistoryQuery
 from beat_arc_agi_3.history import TimelineHistoryReader
 from beat_arc_agi_3.schemas import ArcAction, GameObservation
-from beat_arc_agi_3.timeline import JsonlTimeline
+from beat_arc_agi_3.timeline import JsonlTimeline, ModelPredictionRecord
 
 
 def observation(
@@ -34,6 +34,21 @@ def click_action() -> ArcAction:
     return ArcAction(action="ACTION6", x=3, y=7)
 
 
+def prediction(
+    value: int,
+    *,
+    level_up: bool = False,
+    win: bool = False,
+) -> ModelPredictionRecord:
+    return ModelPredictionRecord(
+        revision="test-revision",
+        grid=((value,),),
+        level_up=level_up,
+        dead=False,
+        win=win,
+    )
+
+
 def populated_timeline(path: Path) -> JsonlTimeline:
     timeline = JsonlTimeline.create(path, game_id="test-game")
     start = observation(0)
@@ -41,9 +56,19 @@ def populated_timeline(path: Path) -> JsonlTimeline:
     two = observation(2, 3, levels_completed=1)
     end = observation(4, state=GameState.WIN, levels_completed=1)
     timeline.initialize(start)
-    timeline.append(action=simple_action(), after=one)
-    timeline.append(action=click_action(), after=two)
-    timeline.append(action=simple_action(), after=end)
+    timeline.append(
+        action=simple_action(), after=one, prediction=prediction(1)
+    )
+    timeline.append(
+        action=click_action(),
+        after=two,
+        prediction=prediction(9, level_up=True),
+    )
+    timeline.append(
+        action=simple_action(),
+        after=end,
+        prediction=prediction(4, win=True),
+    )
     return timeline
 
 
@@ -56,11 +81,17 @@ def test_brief_history_summarizes_all_and_limits_selected_steps(
 
     assert "3 transitions total" in output
     assert "level_ups=1 deaths=0 wins=1" in output
+    assert "model_mispredictions=1" in output
     assert "by-action={1:2, 6:1}" in output
     assert "showing most-recent 2 -> 2 steps" in output
     assert "#0 action=1" not in output
-    assert "#1 action=6(x=3,y=7); 1 cells changed" in output
-    assert "#2 action=1; 1 cells changed" in output
+    assert (
+        "#1 action=6(x=3,y=7); 1 cells changed; "
+        "model=mispredicted revision=test-revisi"
+    ) in output
+    assert (
+        "#2 action=1; 1 cells changed; model=exact revision=test-revisi"
+    ) in output
 
 
 def test_full_history_renders_before_and_after_grids(tmp_path: Path) -> None:

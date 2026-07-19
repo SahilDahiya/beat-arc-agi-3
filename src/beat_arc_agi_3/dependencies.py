@@ -3,7 +3,8 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from beat_arc_agi_3.schemas import GameObservation
+from beat_arc_agi_3.schemas import ArcAction, GameObservation
+from beat_arc_agi_3.synthesis import BacktestReport, BacktestTrust, BfsReport
 from beat_arc_agi_3.workspace import WorkspaceTools
 
 
@@ -23,6 +24,24 @@ class HistoryReader(Protocol):
     async def read(self, query: HistoryQuery) -> str: ...
 
 
+class SynthesisTools(Protocol):
+    def run_backtest(self, *, max_details: int = 1) -> BacktestReport: ...
+
+    def require_green(self) -> BacktestTrust: ...
+
+    def preflight_actions(self, actions: tuple[ArcAction, ...]) -> None: ...
+
+    def run_bfs(
+        self,
+        *,
+        target: Literal["is_goal", "level_up", "win"],
+        max_depth: int,
+        node_budget: int,
+        click_candidates: tuple[tuple[int, int], ...],
+        timeout_seconds: int,
+    ) -> BfsReport: ...
+
+
 @dataclass(frozen=True)
 class AgentDeps:
     """Read-only capabilities available during one deliberation turn."""
@@ -30,3 +49,4 @@ class AgentDeps:
     observation: GameObservation
     history: HistoryReader
     workspace: WorkspaceTools
+    synthesis: SynthesisTools

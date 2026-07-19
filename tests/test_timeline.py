@@ -7,6 +7,7 @@ from arcengine import FrameData, GameState
 from beat_arc_agi_3.schemas import ArcAction, GameObservation
 from beat_arc_agi_3.timeline import (
     JsonlTimeline,
+    ModelPredictionRecord,
     TimelineChainError,
     TimelineCorruptionError,
     TimelineNotFoundError,
@@ -38,6 +39,51 @@ def action(name: str = "ACTION1") -> ArcAction:
     return ArcAction(action="ACTION1")
 
 
+def prediction(
+    value: int,
+    *,
+    level_up: bool = False,
+    dead: bool = False,
+    win: bool = False,
+) -> ModelPredictionRecord:
+    return ModelPredictionRecord(
+        revision="abc123",
+        grid=((value,),),
+        level_up=level_up,
+        dead=dead,
+        win=win,
+    )
+
+
+def test_timeline_records_whether_the_live_model_mispredicted(
+    tmp_path: Path,
+) -> None:
+    timeline = JsonlTimeline.create(
+        tmp_path / "timeline.jsonl",
+        game_id="test-game",
+    )
+    timeline.initialize(observation(0))
+
+    exact = timeline.append(
+        action=action(),
+        after=observation(1),
+        prediction=prediction(1),
+    )
+    mismatch = timeline.append(
+        action=action(),
+        after=observation(3),
+        prediction=prediction(2),
+    )
+
+    assert exact.model_mispredicted is False
+    assert mismatch.model_mispredicted is True
+    reopened = JsonlTimeline(
+        tmp_path / "timeline.jsonl",
+        game_id="test-game",
+    )
+    assert reopened.transitions()[1].prediction.revision == "abc123"
+
+
 def test_timeline_persists_initial_observation_and_linear_transitions(
     tmp_path: Path,
 ) -> None:
@@ -49,10 +95,12 @@ def test_timeline_persists_initial_observation_and_linear_transitions(
     first = timeline.append(
         action=action(),
         after=observation(1, levels_completed=1),
+        prediction=prediction(1, level_up=True),
     )
     second = timeline.append(
         action=action("ACTION6"),
         after=observation(2, state=GameState.WIN, levels_completed=1),
+        prediction=prediction(2, win=True),
     )
 
     assert first.index == 0
@@ -87,7 +135,11 @@ def test_timeline_requires_initial_observation_before_append(
     )
 
     with pytest.raises(TimelineChainError, match="initial observation"):
-        timeline.append(action=action(), after=observation(1))
+        timeline.append(
+            action=action(),
+            after=observation(1),
+            prediction=prediction(1),
+        )
 
 
 def test_timeline_rejects_reinitialization_without_writing(
@@ -115,6 +167,7 @@ def test_timeline_derives_death_from_the_result_observation(
     transition = timeline.append(
         action=action(),
         after=observation(1, state=GameState.GAME_OVER),
+        prediction=prediction(1, dead=True),
     )
 
     assert transition.dead is True
@@ -133,12 +186,17 @@ def test_timeline_rejects_a_corrupt_persisted_index(tmp_path: Path) -> None:
     path = tmp_path / "timeline.jsonl"
     timeline = JsonlTimeline.create(path, game_id="test-game")
     timeline.initialize(observation(0))
-    timeline.append(action=action(), after=observation(1))
+    timeline.append(
+        action=action(),
+        after=observation(1),
+        prediction=prediction(1),
+    )
     corrupt = {
         "type": "action_result",
         "index": 9,
         "action": action().model_dump(mode="json"),
         "after": observation(2).model_dump(mode="json"),
+        "prediction": prediction(2).model_dump(mode="json"),
     }
     with path.open("a", encoding="utf-8") as handle:
         handle.write(f"{json.dumps(corrupt)}\n")
@@ -172,6 +230,10 @@ def test_timeline_append_does_not_reload_persisted_history(
         lambda: (_ for _ in ()).throw(AssertionError("history was reloaded")),
     )
 
-    transition = timeline.append(action=action(), after=observation(1))
+    transition = timeline.append(
+        action=action(),
+        after=observation(1),
+        prediction=prediction(1),
+    )
 
     assert transition.index == 0

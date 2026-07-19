@@ -6,7 +6,7 @@ from typing import Literal, Self
 from arcengine import GameState
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from beat_arc_agi_3.schemas import ArcAction, GameObservation
+from beat_arc_agi_3.schemas import ArcAction, GameObservation, Grid
 
 
 class TimelineError(RuntimeError):
@@ -34,6 +34,8 @@ class Transition(BaseModel):
     before: GameObservation
     action: ArcAction
     after: GameObservation
+    prediction: "ModelPredictionRecord"
+    model_mispredicted: bool
     level_up: bool
     dead: bool
     win: bool
@@ -60,6 +62,19 @@ class Transition(BaseModel):
                 "terminal flags do not match observations: "
                 f"expected {expected}, got {actual}"
             )
+        predicted_flags = {
+            "level_up": self.prediction.level_up,
+            "dead": self.prediction.dead,
+            "win": self.prediction.win,
+        }
+        expected_misprediction = (
+            self.prediction.grid != self.after.grid
+            or predicted_flags != expected
+        )
+        if self.model_mispredicted != expected_misprediction:
+            raise ValueError(
+                "model_mispredicted does not match the recorded prediction"
+            )
         return self
 
     @classmethod
@@ -70,12 +85,21 @@ class Transition(BaseModel):
         before: GameObservation,
         action: ArcAction,
         after: GameObservation,
+        prediction: "ModelPredictionRecord",
     ) -> Self:
         return cls(
             index=index,
             before=before,
             action=action,
             after=after,
+            prediction=prediction,
+            model_mispredicted=(
+                prediction.grid != after.grid
+                or prediction.level_up
+                != (after.levels_completed > before.levels_completed)
+                or prediction.dead != (after.state is GameState.GAME_OVER)
+                or prediction.win != (after.state is GameState.WIN)
+            ),
             level_up=after.levels_completed > before.levels_completed,
             dead=after.state is GameState.GAME_OVER,
             win=after.state is GameState.WIN,
@@ -91,6 +115,18 @@ class InitialObservationRecord(BaseModel):
     observation: GameObservation
 
 
+class ModelPredictionRecord(BaseModel):
+    """Durable pre-action prediction from one exact model revision."""
+
+    model_config = ConfigDict(frozen=True)
+
+    revision: str = Field(min_length=1)
+    grid: Grid
+    level_up: bool
+    dead: bool
+    win: bool
+
+
 class ActionResultRecord(BaseModel):
     """One persisted action and its resulting observation."""
 
@@ -100,6 +136,7 @@ class ActionResultRecord(BaseModel):
     index: int = Field(ge=0)
     action: ArcAction
     after: GameObservation
+    prediction: ModelPredictionRecord
 
 
 TimelineRecord = InitialObservationRecord | ActionResultRecord
@@ -153,6 +190,7 @@ class JsonlTimeline:
         *,
         action: ArcAction,
         after: GameObservation,
+        prediction: ModelPredictionRecord,
     ) -> Transition:
         if self._initial is None:
             raise TimelineChainError(
@@ -173,12 +211,14 @@ class JsonlTimeline:
             before=before,
             action=action,
             after=after,
+            prediction=prediction,
         )
         self._append_record(
             ActionResultRecord(
                 index=transition.index,
                 action=transition.action,
                 after=transition.after,
+                prediction=transition.prediction,
             )
         )
         self._transitions.append(transition)
@@ -263,6 +303,7 @@ class JsonlTimeline:
                         before=before,
                         action=record.action,
                         after=record.after,
+                        prediction=record.prediction,
                     )
                 )
         return initial, transitions

@@ -16,6 +16,9 @@ The repository currently retains a small set of bounded policy defaults while pr
 - Agent output/tool retry budget is `2`.
 - Deliberation request limit is `8`.
 - Deliberation tool-call limit is `8`.
+- Generated world-model calls default to a 10-second hard timeout.
+- `run_python` defaults to 10 seconds and is bounded to `1..60`.
+- `run_bfs` defaults to depth 24, 100,000 nodes, and 60 seconds; its hard bounds are depth 200, 4,000,000 nodes, and 600 seconds.
 
 These values are useful starting policies, not permanent constants. During the configurable agent-and-loop work, move them into validated typed configuration and pass that configuration explicitly through process composition.
 
@@ -37,14 +40,14 @@ Additional controls should be added only when their corresponding behavior is im
 - an optional target number of completed levels;
 - whether `GAME_OVER` allows another deliberation for `RESET`;
 - whether level completion interrupts the remaining queue;
-- model-misprediction handling and retry bounds.
+- generated-code and model-search resource bounds.
 
 Configuration must not weaken the loop's safety invariants:
 
 - `WIN` ends the run.
 - The loop never exceeds its explicit turn or action budgets.
 - An action is checked against the environment's current legal actions immediately before execution.
-- The remaining queue is discarded when a world-model mismatch invalidates its assumptions, once model checking exists.
+- The remaining queue is discarded immediately when a world-model mismatch invalidates its assumptions.
 
 The repeated construction of `LoopResult` for different stop reasons is an implementation detail, not policy. It may be consolidated behind a helper without changing configuration or behavior.
 
@@ -63,3 +66,5 @@ Settings + AgentPolicy + LoopPolicy
 ## Test side effects
 
 The default `uv run pytest` invocation includes `paid_integration`. That test requires both configured API keys, uses `PYDANTIC_AI_MODEL`, creates an online Arcade environment, makes a paid model request, and executes one real ARC action. The marker documents the test; it does not skip it. Unavailable credentials or services fail the suite by design.
+
+Generated-code execution requires `bubblewrap` (`bwrap`). It is a required runtime dependency on the current Linux/WSL target; missing sandbox support fails model validation and analytical execution without an unsafe fallback.

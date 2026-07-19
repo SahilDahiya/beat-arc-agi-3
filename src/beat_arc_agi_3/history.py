@@ -58,6 +58,8 @@ class TimelineHistoryReader:
             f"level_ups={sum(item.level_up for item in transitions)} "
             f"deaths={sum(item.dead for item in transitions)} "
             f"wins={sum(item.win for item in transitions)} "
+            "model_mispredictions="
+            f"{sum(item.model_mispredicted for item in transitions)} "
             f"resets(action0)={action_counts[0]} "
             f"clicks(action6)={action_counts[6]}; "
             f"by-action={by_action}; max_level={max_level}"
@@ -108,6 +110,8 @@ class TimelineHistoryReader:
         return (
             f"#{transition.index} action={action_label}; "
             f"{self._changed_cells(transition.before, transition.after)}; "
+            f"model={'mispredicted' if transition.model_mispredicted else 'exact'} "
+            f"revision={transition.prediction.revision[:12]}; "
             f"state={transition.after.state.value}; "
             f"level={transition.after.levels_completed}; flags={flags}"
         )

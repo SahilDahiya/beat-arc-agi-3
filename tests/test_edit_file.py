@@ -6,6 +6,20 @@ from beat_arc_agi_3.tools.edit_file import EditFileError, EditFileQuery
 from beat_arc_agi_3.workspace import SessionWorkspace
 
 
+MINIMAL_WORLD_MODEL = '''
+def init_state(entry_grid):
+    return {}
+
+
+def predict(state, grid, action, x=None, y=None):
+    return grid, {"level_up": False, "dead": False, "win": False}, state
+
+
+def is_goal(state, grid):
+    return False
+'''.lstrip()
+
+
 def test_edit_file_replaces_one_exact_occurrence(tmp_path: Path) -> None:
     target = tmp_path / "notes.md"
     target.write_text("before\nold value\nafter\n", encoding="utf-8")
@@ -46,6 +60,28 @@ def test_edit_file_fails_when_exact_text_is_absent(tmp_path: Path) -> None:
             )
         )
     assert target.read_text(encoding="utf-8") == original
+
+
+def test_edit_file_rejects_an_invalid_world_model_without_changing_it(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "world_model_v5.py"
+    target.write_text(MINIMAL_WORLD_MODEL, encoding="utf-8")
+    workspace = SessionWorkspace(tmp_path)
+
+    with pytest.raises(
+        EditFileError,
+        match="missing required callable: is_goal",
+    ):
+        workspace.edit_file(
+            EditFileQuery(
+                path="world_model_v5.py",
+                old_string="def is_goal",
+                new_string="def removed_goal",
+            )
+        )
+
+    assert target.read_text(encoding="utf-8") == MINIMAL_WORLD_MODEL
 
 
 def test_edit_file_requires_a_unique_match_by_default(tmp_path: Path) -> None:

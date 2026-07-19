@@ -12,6 +12,12 @@ from beat_arc_agi_3.config import Settings
 from beat_arc_agi_3.dependencies import AgentDeps, HistoryQuery
 from beat_arc_agi_3.runner import deliberate, render_observation
 from beat_arc_agi_3.schemas import CommitActions, GameObservation
+from beat_arc_agi_3.synthesis import (
+    BacktestReport,
+    BacktestRequiredError,
+    BacktestTrust,
+    BfsReport,
+)
 from beat_arc_agi_3.tools.edit_file import EditFileQuery
 from beat_arc_agi_3.tools.read_file import ReadFileQuery
 from beat_arc_agi_3.tools.write_file import WriteFileQuery
@@ -53,6 +59,61 @@ class RecordingWorkspace:
     def edit_file(self, query: EditFileQuery) -> str:
         self.edit_calls.append(query)
         return f"OK: replaced 1 occurrence(s) in {query.path}."
+
+
+@dataclass
+class RecordingSynthesis:
+    green: bool = True
+    backtest_calls: list[int] = field(default_factory=list)
+    preflight_calls: list[tuple[str, ...]] = field(default_factory=list)
+
+    def run_backtest(self, *, max_details: int = 1) -> BacktestReport:
+        self.backtest_calls.append(max_details)
+        self.green = True
+        return BacktestReport(
+            revision="test-revision",
+            timeline_transitions=0,
+            transitions_checked=0,
+            exact_transitions=0,
+            status="green",
+        )
+
+    def require_green(self) -> BacktestTrust:
+        if not self.green:
+            raise BacktestRequiredError(
+                "current world model revision has not been backtested"
+            )
+        return BacktestTrust(
+            revision="test-revision",
+            timeline_transitions=0,
+            state={},
+            grid=((0,),),
+        )
+
+    def run_bfs(
+        self,
+        *,
+        target: str,
+        max_depth: int,
+        node_budget: int,
+        click_candidates: tuple[tuple[int, int], ...],
+        timeout_seconds: int,
+    ) -> BfsReport:
+        self.require_green()
+        return BfsReport(
+            revision="test-revision",
+            target=target,
+            status="found",
+            actions=(),
+            predicted_grid=((0,),),
+            expanded_nodes=0,
+            distinct_states=1,
+            depth=0,
+        )
+
+    def preflight_actions(self, actions) -> None:
+        self.require_green()
+        self.preflight_calls.append(tuple(action.action for action in actions))
 
 
 @dataclass
@@ -117,6 +178,9 @@ def test_agent_reads_history_then_returns_typed_commit() -> None:
             "read_file",
             "write_file",
             "edit_file",
+            "run_backtest",
+            "run_python",
+            "run_bfs",
         ]
         schemas = {
             tool.name: tool.parameters_json_schema
@@ -147,6 +211,7 @@ def test_agent_reads_history_then_returns_typed_commit() -> None:
         observation=observation(1, 6),
         history=history,
         workspace=RecordingWorkspace(),
+        synthesis=RecordingSynthesis(),
     )
     conversation = MemoryConversation()
     result = asyncio.run(
@@ -156,6 +221,7 @@ def test_agent_reads_history_then_returns_typed_commit() -> None:
     assert isinstance(result, CommitActions)
     assert result.actions[0].action == "ACTION1"
     assert history.calls == [HistoryQuery(detail="brief", limit=3)]
+    assert deps.synthesis.preflight_calls == [("ACTION1",)]
     assert len(conversation.messages()) == 5
 
 
@@ -174,6 +240,7 @@ def test_successful_commit_skips_sibling_history_tool() -> None:
         observation=observation(1),
         history=history,
         workspace=RecordingWorkspace(),
+        synthesis=RecordingSynthesis(),
     )
     result = asyncio.run(
         deliberate(
@@ -200,6 +267,7 @@ def test_agent_retries_a_commit_with_an_unavailable_action() -> None:
         observation=observation(1),
         history=RecordingHistory(),
         workspace=RecordingWorkspace(),
+        synthesis=RecordingSynthesis(),
     )
     result = asyncio.run(
         deliberate(
@@ -211,8 +279,9 @@ def test_agent_retries_a_commit_with_an_unavailable_action() -> None:
     assert result.actions[0].action == "ACTION1"
 
 
-def test_agent_must_create_world_model_before_committing() -> None:
+def test_agent_must_create_and_backtest_world_model_before_committing() -> None:
     workspace = RecordingWorkspace(existing_files=set())
+    synthesis = RecordingSynthesis(green=False)
     model_calls = 0
 
     def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -234,14 +303,17 @@ def test_agent_must_create_world_model_before_committing() -> None:
                     )
                 ]
             )
-        return ModelResponse(
-            parts=[ToolCallPart("commit_actions", commit_args())]
-        )
+        if model_calls == 3:
+            return ModelResponse(
+                parts=[ToolCallPart("run_backtest", {"max_details": 2})]
+            )
+        return ModelResponse(parts=[ToolCallPart("commit_actions", commit_args())])
 
     deps = AgentDeps(
         observation=observation(1),
         history=RecordingHistory(),
         workspace=workspace,
+        synthesis=synthesis,
     )
     result = asyncio.run(
         deliberate(
@@ -249,7 +321,7 @@ def test_agent_must_create_world_model_before_committing() -> None:
         )
     )
 
-    assert model_calls == 3
+    assert model_calls == 4
     assert result.actions[0].action == "ACTION1"
     assert workspace.write_calls == [
         WriteFileQuery(
@@ -257,6 +329,7 @@ def test_agent_must_create_world_model_before_committing() -> None:
             content="def predict(state, action):\n    return state\n",
         )
     ]
+    assert synthesis.backtest_calls == [2]
 
 
 def test_deliberation_reuses_session_message_history() -> None:
@@ -271,6 +344,7 @@ def test_deliberation_reuses_session_message_history() -> None:
         observation=observation(1),
         history=RecordingHistory(),
         workspace=RecordingWorkspace(),
+        synthesis=RecordingSynthesis(),
     )
     conversation = MemoryConversation()
 
@@ -300,6 +374,7 @@ def test_agent_reads_a_workspace_file_then_commits() -> None:
         observation=observation(1),
         history=RecordingHistory(),
         workspace=workspace,
+        synthesis=RecordingSynthesis(),
     )
     result = asyncio.run(
         deliberate(build_agent(FunctionModel(model)), deps, MemoryConversation())
@@ -347,6 +422,7 @@ def test_agent_writes_then_edits_workspace_files_before_commit() -> None:
         observation=observation(1),
         history=RecordingHistory(),
         workspace=workspace,
+        synthesis=RecordingSynthesis(),
     )
     result = asyncio.run(
         deliberate(build_agent(FunctionModel(model)), deps, MemoryConversation())

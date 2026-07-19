@@ -99,6 +99,7 @@ async def run_agent_loop(
                 observation=current,
                 history=history,
                 workspace=session.workspace,
+                synthesis=session.synthesis,
             ),
             session.conversation,
             turn_context=turn_context,
@@ -124,8 +125,17 @@ async def run_agent_loop(
                 )
                 break
 
+            pending_prediction = session.synthesis.predict_action(action)
             after = adapter.apply(action)
-            transition = session.timeline.append(action=action, after=after)
+            transition = session.timeline.append(
+                action=action,
+                after=after,
+                prediction=pending_prediction.record,
+            )
+            prediction_matched = session.synthesis.observe(
+                pending_prediction,
+                transition,
+            )
             current = after
             executed_count += 1
             actions_taken += 1
@@ -137,6 +147,14 @@ async def run_agent_loop(
                     actions=actions_taken,
                     observation=current,
                 )
+            if not prediction_matched:
+                queue_stop = (
+                    f"world model revision "
+                    f"{pending_prediction.revision[:12]} mispredicted "
+                    f"transition {transition.index}; remaining actions were "
+                    "dropped"
+                )
+                break
             if transition.level_up:
                 queue_stop = (
                     "a level was completed; remaining actions were dropped"

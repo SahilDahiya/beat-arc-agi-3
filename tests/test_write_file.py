@@ -6,6 +6,20 @@ from beat_arc_agi_3.tools.write_file import WriteFileError, WriteFileQuery
 from beat_arc_agi_3.workspace import SessionWorkspace
 
 
+MINIMAL_WORLD_MODEL = '''
+def init_state(entry_grid):
+    return {}
+
+
+def predict(state, grid, action, x=None, y=None):
+    return grid, {"level_up": False, "dead": False, "win": False}, state
+
+
+def is_goal(state, grid):
+    return False
+'''.lstrip()
+
+
 def test_workspace_reports_when_world_model_exists(tmp_path: Path) -> None:
     workspace = SessionWorkspace(tmp_path)
 
@@ -14,11 +28,45 @@ def test_workspace_reports_when_world_model_exists(tmp_path: Path) -> None:
     workspace.write_file(
         WriteFileQuery(
             path="world_model_v5.py",
-            content="def predict(state, action):\n    return state\n",
+            content=MINIMAL_WORLD_MODEL,
         )
     )
 
     assert workspace.has_file("world_model_v5.py") is True
+
+
+def test_write_file_installs_a_valid_world_model(tmp_path: Path) -> None:
+    workspace = SessionWorkspace(tmp_path)
+
+    output = workspace.write_file(
+        WriteFileQuery(
+            path="world_model_v5.py",
+            content=MINIMAL_WORLD_MODEL,
+        )
+    )
+
+    assert "Installed world model revision" in output
+    assert "init_state, predict, is_goal" in output
+    assert "Run run_backtest before committing actions." in output
+
+
+def test_write_file_rejects_an_invalid_world_model_without_persisting_it(
+    tmp_path: Path,
+) -> None:
+    workspace = SessionWorkspace(tmp_path)
+
+    with pytest.raises(
+        WriteFileError,
+        match="missing required callable: init_state",
+    ):
+        workspace.write_file(
+            WriteFileQuery(
+                path="world_model_v5.py",
+                content="def predict():\n    pass\n",
+            )
+        )
+
+    assert not (tmp_path / "world_model_v5.py").exists()
 
 
 def test_write_file_creates_utf8_text_and_reports_trace_count(

@@ -1,3 +1,6 @@
+import asyncio
+from typing import Literal
+
 from pydantic_ai import Agent, ModelRetry, RunContext, ToolOutput
 from pydantic_ai.models import Model
 from pydantic_ai.models.openai import OpenAIResponsesModel
@@ -6,20 +9,43 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from beat_arc_agi_3.config import Settings
 from beat_arc_agi_3.dependencies import AgentDeps, HistoryDetail, HistoryQuery
 from beat_arc_agi_3.schemas import CommitActions
+from beat_arc_agi_3.synthesis import BacktestRequiredError
 from beat_arc_agi_3.tools.edit_file import EditFileError, EditFileQuery
 from beat_arc_agi_3.tools.read_file import ReadFileError, ReadFileQuery
+from beat_arc_agi_3.tools.run_backtest import (
+    RunBacktestQuery,
+    render_backtest_report,
+)
+from beat_arc_agi_3.tools.run_bfs import (
+    ClickCandidate,
+    RunBfsQuery,
+    execute_run_bfs,
+)
+from beat_arc_agi_3.tools.run_python import (
+    RunPythonError,
+    RunPythonQuery,
+    execute_run_python,
+)
 from beat_arc_agi_3.tools.write_file import WriteFileError, WriteFileQuery
-
-
-WORLD_MODEL_PATH = "world_model_v5.py"
+from beat_arc_agi_3.world_model import WorldModelError
 
 
 INSTRUCTIONS = """
 You are an ARC-AGI-3 deliberation agent. Infer useful next actions from the
 current observation and recorded real transitions. You may inspect history with
-read_history. Use read_file, write_file, and edit_file for durable UTF-8 working
-material inside this session. Prefer exact, narrow edits once a file exists.
-You must create world_model_v5.py before committing any environment action.
+read_history and analyze read-only Session evidence with run_python. Use
+read_file, write_file, and edit_file for durable UTF-8 working material inside
+this session. Prefer exact, narrow edits once a file exists.
+Before committing, create and backtest world_model_v5.py. It must define exactly
+these stateful interfaces: init_state(entry_grid), predict(state, grid, action,
+x=None, y=None) returning (predicted_grid, {"level_up": bool, "dead": bool,
+"win": bool}, next_state), and is_goal(state, grid) returning bool. Model state
+must be JSON-serializable. predicted_grid must be a rectangular nested list of
+integer color values from 0 through 15 with the observation's shape; never
+return hexadecimal strings. After every model revision, call run_backtest and
+repair the earliest mismatch until the current revision is green.
+Use run_bfs only on that green revision when model-space search is useful; its
+returned plan is valid only for the revision named in the result.
 When ready, call commit_actions with a non-empty ordered queue, the reason for
 the queue, and a suggestion for the next deliberation turn. Only commit actions
 listed as legal in the current observation. ACTION6 is a click and requires x/y
@@ -127,15 +153,97 @@ def build_agent(
         except EditFileError as exc:
             raise ModelRetry(str(exc)) from exc
 
+    @agent.tool
+    async def run_backtest(
+        ctx: RunContext[AgentDeps],
+        max_details: int = 1,
+    ) -> str:
+        """Replay real Timeline transitions through the installed world model.
+
+        Args:
+            max_details: Maximum exact cell differences to show for the first
+                mismatch. Zero still reports counts and terminal flags.
+        """
+
+        query = RunBacktestQuery(max_details=max_details)
+        try:
+            report = await asyncio.to_thread(
+                ctx.deps.synthesis.run_backtest,
+                max_details=query.max_details,
+            )
+        except (BacktestRequiredError, WorldModelError, ValueError) as exc:
+            raise ModelRetry(str(exc)) from exc
+        return render_backtest_report(report)
+
+    @agent.tool
+    async def run_python(
+        ctx: RunContext[AgentDeps],
+        code: str,
+        timeout_seconds: int = 10,
+    ) -> str:
+        """Run Python analysis in a read-only, networkless Session sandbox.
+
+        Args:
+            code: Complete Python source to execute.
+            timeout_seconds: Hard execution timeout from 1 through 60 seconds.
+        """
+
+        query = RunPythonQuery(
+            code=code,
+            timeout_seconds=timeout_seconds,
+        )
+        try:
+            return await asyncio.to_thread(
+                execute_run_python,
+                ctx.deps.workspace,
+                query,
+            )
+        except RunPythonError as exc:
+            raise ModelRetry(str(exc)) from exc
+
+    @agent.tool
+    async def run_bfs(
+        ctx: RunContext[AgentDeps],
+        target: Literal["is_goal", "level_up", "win"] = "is_goal",
+        max_depth: int = 24,
+        node_budget: int = 100_000,
+        click_candidates: list[ClickCandidate] | None = None,
+        timeout_seconds: int = 60,
+    ) -> str:
+        """Search the current green model for a bounded goal-reaching plan.
+
+        Args:
+            target: Modeled success predicate to seek.
+            max_depth: Maximum action count in a candidate plan.
+            node_budget: Maximum modeled states to expand.
+            click_candidates: Coordinates to consider when ACTION6 is legal.
+            timeout_seconds: Hard search timeout from 1 through 600 seconds.
+        """
+
+        query = RunBfsQuery(
+            target=target,
+            max_depth=max_depth,
+            node_budget=node_budget,
+            click_candidates=tuple(click_candidates or ()),
+            timeout_seconds=timeout_seconds,
+        )
+        try:
+            return await asyncio.to_thread(
+                execute_run_bfs,
+                ctx.deps.synthesis,
+                query,
+            )
+        except (BacktestRequiredError, WorldModelError, ValueError) as exc:
+            raise ModelRetry(str(exc)) from exc
+
     @agent.output_validator
     async def validate_commit(
         ctx: RunContext[AgentDeps], output: CommitActions
     ) -> CommitActions:
-        if not ctx.deps.workspace.has_file(WORLD_MODEL_PATH):
-            raise ModelRetry(
-                f"Create {WORLD_MODEL_PATH} with write_file before committing "
-                "environment actions."
-            )
+        try:
+            ctx.deps.synthesis.require_green()
+        except (BacktestRequiredError, WorldModelError) as exc:
+            raise ModelRetry(str(exc)) from exc
         legal = set(ctx.deps.observation.available_action_names)
         unavailable = sorted(
             {action.action for action in output.actions if action.action not in legal}
@@ -145,6 +253,12 @@ def build_agent(
                 f"Committed unavailable actions {unavailable}; "
                 f"legal actions are {sorted(legal)}"
             )
+        try:
+            ctx.deps.synthesis.preflight_actions(output.actions)
+        except (BacktestRequiredError, WorldModelError) as exc:
+            raise ModelRetry(
+                f"Committed actions failed world-model preflight: {exc}"
+            ) from exc
         return output
 
     return agent

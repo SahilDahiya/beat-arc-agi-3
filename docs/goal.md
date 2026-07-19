@@ -21,8 +21,12 @@ The implemented foundation now provides:
 13. Expose new-session process composition through `python -m beat_arc_agi_3 run` with explicit game, reusable session label, mode, and budget arguments; generated Session IDs are UTC timestamped.
 14. Expose the trace-derived Schema Harness `read_file(path, offset=1, limit=2000)` tool over UTF-8 files confined to the active Session.
 15. Give each Schema file tool a separate implementation and expose trace-derived `write_file(path, content)` plus exact `edit_file(path, old_string, new_string, replace_all=false)` with atomic persistence.
-16. Require every Session to contain `world_model_v5.py` before the agent may commit any real ARC action.
+16. Require `world_model_v5.py` to implement the canonical stateful `init_state`, `predict`, and `is_goal` interfaces; invalid revisions never replace the live model.
+17. Execute generated world-model code and ad hoc Python in a read-only, networkless Session sandbox with hard timeouts.
+18. Expose trace-derived `run_backtest`, replay the complete Timeline, and require the exact current model revision and Timeline prefix to be green before commit.
+19. Record a revision-bound prediction with every real action, compare it with reality, and cancel the committed queue at the first model mismatch.
+20. Expose trace-derived `run_python` for bounded analysis and `run_bfs` for revision-bound model-space planning.
 
-The current world-model gate checks file existence only. World-model installation/execution, interface validation, backtesting, search, model-misprediction queue cancellation, and competition submission integration remain later milestones. Resuming an environment process from an existing Session is also not implemented; the current loop deliberately requires a new empty Session.
+Competition submission integration, score reconstruction, candidate-model archives, and explicit process resume remain later milestones. The current loop deliberately requires a new empty Session.
 
 The next implementation work moves the remaining agent/history defaults into typed configuration. See [Configuration direction](configuration.md) for those remaining policy values.

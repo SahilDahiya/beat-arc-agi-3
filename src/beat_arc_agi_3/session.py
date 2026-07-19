@@ -18,6 +18,7 @@ from pydantic import (
 )
 
 from beat_arc_agi_3.conversation import ConversationError, JsonlConversation
+from beat_arc_agi_3.synthesis import SynthesisHarness
 from beat_arc_agi_3.timeline import (
     JsonlTimeline,
     TimelineError,
@@ -72,6 +73,7 @@ class Session:
     timeline: JsonlTimeline
     conversation: JsonlConversation
     workspace: SessionWorkspace
+    synthesis: SynthesisHarness
 
     @property
     def metadata_path(self) -> Path:
@@ -133,12 +135,17 @@ class Session:
             game_id=metadata.game_id,
         )
         conversation = JsonlConversation(session_path / "messages.jsonl")
+        workspace = SessionWorkspace(session_path)
         return cls(
             path=session_path,
             metadata=metadata,
             timeline=timeline,
             conversation=conversation,
-            workspace=SessionWorkspace(session_path),
+            workspace=workspace,
+            synthesis=SynthesisHarness(
+                model_path=session_path / "world_model_v5.py",
+                timeline=timeline,
+            ),
         )
 
     @classmethod
@@ -186,12 +193,17 @@ class Session:
                 "invalid session conversation: "
                 f"{session_path / 'messages.jsonl'}"
             ) from exc
+        workspace = SessionWorkspace(session_path)
         return cls(
             path=session_path,
             metadata=metadata,
             timeline=timeline,
             conversation=conversation,
-            workspace=SessionWorkspace(session_path),
+            workspace=workspace,
+            synthesis=SynthesisHarness(
+                model_path=session_path / "world_model_v5.py",
+                timeline=timeline,
+            ),
         )
 
     @staticmethod

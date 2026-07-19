@@ -15,6 +15,8 @@ read_when: you need the canonical direction, architecture, contracts, or impleme
 
 `uv run pytest` intentionally includes a required paid integration test. It loads the repository `.env`, calls the configured OpenAI model, creates a real online Arcade environment, and executes one real ARC action. Missing credentials, unavailable paid model access, ARC service failures, and action failures fail the suite; there is no skip or fake fallback.
 
+The harness executes generated Python through `bubblewrap`; `bwrap` must be installed and usable. There is no unsandboxed execution fallback.
+
 ## Run an agent session
 
 Every process value is explicit:
