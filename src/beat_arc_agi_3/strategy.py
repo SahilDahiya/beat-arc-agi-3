@@ -1,9 +1,119 @@
+from collections import Counter
+
 from beat_arc_agi_3.schemas import GameObservation
 from beat_arc_agi_3.timeline import JsonlTimeline, Transition
 
 
 RECENT_PREDICTION_WINDOW = 5
 SHORT_CYCLE_MAX_LENGTH = 8
+
+
+def _render_color_counts(values: list[int]) -> str:
+    counts = Counter(values)
+    if not counts:
+        return "none"
+    return ",".join(f"{color}:{counts[color]}" for color in sorted(counts))
+
+
+def render_level_entry_context(timeline: JsonlTimeline) -> str | None:
+    """Render factual grounding requirements only at a new level entry."""
+
+    initial = timeline.initial_observation
+    if initial is None:
+        raise ValueError("level-entry context requires an initialized Timeline")
+
+    transitions = timeline.transitions()
+    if not transitions:
+        observation = initial
+        trigger = "session_start"
+    elif transitions[-1].level_up:
+        observation = transitions[-1].after
+        trigger = f"transition #{transitions[-1].index} level_up"
+    else:
+        return None
+
+    height = len(observation.grid)
+    width = len(observation.grid[0]) if observation.grid else 0
+    band_width = (
+        max(1, (min(height, width) + 9) // 10)
+        if height > 0 and width > 0
+        else 0
+    )
+    all_values = [value for row in observation.grid for value in row]
+    peripheral_values: list[int] = []
+    interior_values: list[int] = []
+    for row_index, row in enumerate(observation.grid):
+        for column_index, value in enumerate(row):
+            is_peripheral = (
+                row_index < band_width
+                or column_index < band_width
+                or row_index >= height - band_width
+                or column_index >= width - band_width
+            )
+            target = peripheral_values if is_peripheral else interior_values
+            target.append(value)
+
+    actions = ",".join(observation.available_action_names) or "none"
+    return "\n".join(
+        [
+            "Level-entry grounding protocol:",
+            (
+                f"- trigger={trigger}; level={observation.levels_completed}/"
+                f"{observation.win_levels}"
+            ),
+            (
+                f"- entry grid shape={height}x{width}; color counts="
+                f"{_render_color_counts(all_values)}"
+            ),
+            (
+                f"- geometric peripheral band width={band_width}; "
+                "peripheral color counts="
+                f"{_render_color_counts(peripheral_values)}; "
+                f"interior color counts={_render_color_counts(interior_values)}"
+            ),
+            f"- legal actions={actions}",
+            "Before committing a route, update notes.md with these testable "
+            "structures:",
+            (
+                "- Observed facts: exact playfield/periphery geometry, color "
+                "groups, prior action effects, and any demonstrated lattice "
+                "or walkability constraints."
+            ),
+            (
+                "- Hypotheses: explicitly tentative avatar/objects, action "
+                "mapping, persistent or consumable resources, counters or "
+                "meters, and target-like patterns."
+            ),
+            (
+                "- Known unknowns: the missing evidence that blocks a "
+                "supported plan."
+            ),
+            (
+                "- Cheapest discriminating probe: an action or short known-safe "
+                "prefix plus one uncertain final action, with expected result."
+            ),
+            (
+                "- Temporary goal: record a predicate, evidence, and falsifier; "
+                "encode the best-supported current form in is_goal. It is "
+                "revisable, not a permanent truth."
+            ),
+            (
+                "Use run_python for exact structural inspection when useful. "
+                "Do not assign semantic labels to colors or regions without "
+                "transition evidence."
+            ),
+        ]
+    )
+
+
+def render_strategy_context(timeline: JsonlTimeline) -> str:
+    """Render current deterministic strategy guidance for deliberation."""
+
+    sections = [
+        render_level_entry_context(timeline),
+        render_experiment_context(timeline),
+    ]
+    return "\n\n".join(section for section in sections if section is not None)
 
 
 def _observation_signature(observation: GameObservation) -> tuple[object, ...]:

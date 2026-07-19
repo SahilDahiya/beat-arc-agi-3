@@ -14,7 +14,7 @@ from pydantic_ai import (
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from beat_arc_agi_3.agent import build_agent, build_openai_model
+from beat_arc_agi_3.agent import INSTRUCTIONS, build_agent, build_openai_model
 from beat_arc_agi_3.config import Settings
 from beat_arc_agi_3.dependencies import AgentDeps, HistoryQuery
 from beat_arc_agi_3.events import ArcEvent
@@ -34,6 +34,21 @@ from beat_arc_agi_3.world_model import WorldModelError
 
 
 models.ALLOW_MODEL_REQUESTS = False
+
+
+def test_agent_instructions_require_revisable_level_entry_grounding() -> None:
+    instructions = " ".join(INSTRUCTIONS.split())
+
+    assert "Level-entry grounding" in instructions
+    assert "Observed facts" in instructions
+    assert "Known unknowns" in instructions
+    assert "Cheapest discriminating probe" in instructions
+    assert "Temporary goal" in instructions
+    assert "predicate, evidence, and falsifier" in instructions
+    assert "re-run this protocol after every observed level_up" in instructions
+    assert (
+        "Do not treat is_goal returning False everywhere as final" in instructions
+    )
 
 
 @dataclass

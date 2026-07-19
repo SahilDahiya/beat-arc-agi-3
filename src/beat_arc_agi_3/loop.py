@@ -1,7 +1,9 @@
 import asyncio
+import json
 from typing import Literal
 
 from arcengine import GameState
+from openai import APIError
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import Agent
 
@@ -23,7 +25,7 @@ from beat_arc_agi_3.history import TimelineHistoryReader
 from beat_arc_agi_3.runner import deliberate
 from beat_arc_agi_3.schemas import CommitActions, GameObservation
 from beat_arc_agi_3.session import Session
-from beat_arc_agi_3.strategy import render_experiment_context
+from beat_arc_agi_3.strategy import render_strategy_context
 from beat_arc_agi_3.synthesis import BacktestRequiredError
 
 
@@ -48,6 +50,29 @@ class LoopResult(BaseModel):
     turns: int = Field(ge=0)
     actions: int = Field(ge=0)
     observation: GameObservation
+
+
+def _render_failure_message(exc: Exception) -> str:
+    message = str(exc).strip() or type(exc).__name__
+    if not isinstance(exc, APIError):
+        return message
+
+    details: dict[str, object] = {}
+    for name in ("status_code", "request_id", "type", "code", "param"):
+        value = getattr(exc, name, None)
+        if value is not None:
+            details[name] = value
+    if exc.body is not None:
+        details["body"] = exc.body
+    if not details:
+        return message
+    encoded = json.dumps(
+        details,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return f"{message}; openai={encoded}"
 
 
 async def run_agent_loop(
@@ -78,7 +103,7 @@ async def run_agent_loop(
     actions_taken = 0
     turn_context = (
         "This is the initial observation for the session.\n"
-        f"{render_experiment_context(session.timeline)}"
+        f"{render_strategy_context(session.timeline)}"
     )
     history = TimelineHistoryReader(session.timeline)
 
@@ -337,7 +362,7 @@ async def run_agent_loop(
                 f"{current.levels_completed}; state "
                 f"{turn_start.state.value}→{current.state.value}. "
                 f"The previous intent was: {commit.reason}"
-                f"\n{render_experiment_context(session.timeline)}"
+                f"\n{render_strategy_context(session.timeline)}"
             )
     except (KeyboardInterrupt, asyncio.CancelledError) as exc:
         message = str(exc).strip() or "run interrupted"
@@ -351,7 +376,7 @@ async def run_agent_loop(
         )
         raise
     except Exception as exc:
-        message = str(exc).strip() or type(exc).__name__
+        message = _render_failure_message(exc)
         session.events.append(
             turn=active_turn,
             event=RunFailedEvent(

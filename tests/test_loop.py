@@ -1,8 +1,10 @@
 import asyncio
 from pathlib import Path
 
+import httpx
 import pytest
 from arcengine import FrameData, GameAction, GameState
+from openai import APIError
 from pydantic_ai import ModelMessage, ModelResponse, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
@@ -303,6 +305,7 @@ def test_loop_prompts_with_current_experiment_evidence(tmp_path: Path) -> None:
     )
 
     assert "Harness experiment evidence" in requests[0]
+    assert "Level-entry grounding protocol" in requests[0]
     assert "online predictions exact=0/0" in requests[0]
     assert "smallest discriminating experiment" in requests[0]
     assert "max_turns" not in requests[0]
@@ -508,3 +511,53 @@ def test_loop_persists_deliberation_failure_on_the_active_turn(
     assert terminal.event.type == "run_failed"
     assert terminal.event.error_type == "RuntimeError"
     assert terminal.event.message == "model request failed"
+
+
+def test_loop_persists_compact_openai_error_details(tmp_path: Path) -> None:
+    environment = FakeEnvironment([])
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        raise APIError(
+            "stream failed",
+            request=httpx.Request(
+                "POST",
+                "https://chatgpt.com/backend-api/codex/responses",
+                headers={"authorization": "Bearer secret"},
+            ),
+            body={
+                "type": "server_error",
+                "code": "stream_failed",
+                "request_id": "request-123",
+                "detail": "backend stream terminated",
+            },
+        )
+
+    session = Session.create(
+        sessions_root=tmp_path,
+        session_id="run-001",
+        game_id="test-game",
+        model="test:model",
+    )
+    adapter = ArcGameAdapter(environment)
+
+    with pytest.raises(APIError, match="stream failed"):
+        asyncio.run(
+            run_agent_loop(
+                agent=build_agent(FunctionModel(model)),
+                adapter=adapter,
+                initial_observation=adapter.reset(),
+                session=session,
+                policy=LoopPolicy(max_turns=1, max_actions=1),
+            )
+        )
+
+    terminal = session.events.entries()[-1]
+    assert terminal.event.type == "run_failed"
+    assert terminal.event.error_type == "APIError"
+    assert "stream failed" in terminal.event.message
+    assert '"type":"server_error"' in terminal.event.message
+    assert '"code":"stream_failed"' in terminal.event.message
+    assert '"request_id":"request-123"' in terminal.event.message
+    assert '"detail":"backend stream terminated"' in terminal.event.message
+    assert "Bearer secret" not in terminal.event.message
+    assert "authorization" not in terminal.event.message

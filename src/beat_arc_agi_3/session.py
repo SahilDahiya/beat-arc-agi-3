@@ -53,6 +53,22 @@ evidence arrives.
 
 ## Current level
 
+## Level-entry grounding
+
+### Observed facts
+
+### Hypotheses
+
+### Known unknowns
+
+### Cheapest discriminating probe
+
+## Temporary goal
+
+- Predicate:
+- Evidence:
+- Falsifier:
+
 ## Hypotheses to test
 
 ## Confirmed facts

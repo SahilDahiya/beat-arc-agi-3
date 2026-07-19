@@ -42,6 +42,15 @@ def test_session_create_owns_metadata_and_timeline(tmp_path: Path) -> None:
     assert notes.startswith("# Notes - living scientific scratchpad\n")
     assert "## Confirmed mechanics" in notes
     assert "## Current level" in notes
+    assert "## Level-entry grounding" in notes
+    assert "### Observed facts" in notes
+    assert "### Hypotheses" in notes
+    assert "### Known unknowns" in notes
+    assert "### Cheapest discriminating probe" in notes
+    assert "## Temporary goal" in notes
+    assert "- Predicate:" in notes
+    assert "- Evidence:" in notes
+    assert "- Falsifier:" in notes
     assert "## Hypotheses to test" in notes
     assert "## Confirmed facts" in notes
     assert "## Current plan" in notes

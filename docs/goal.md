@@ -33,6 +33,7 @@ The implemented foundation now provides:
 25. Atomically preserve the exact `world_model_v5.py` revision at every observed level completion in an immutable, journaled `snapshots/cleared_level_N.py` artifact.
 26. Support exact-index, inclusive-range, action, terminal/reset, and prediction-status history selection. Every selected transition and earliest backtest mismatch includes deterministic connected-component boxes, color transitions and population deltas, geometric peripheral-band counts, and level-entry or prior-action references without assigning game-specific semantics.
 27. Protect Session evidence extraction with a deterministic Pydantic Evals regression over the first two successful LS20 stage-zero Sessions plus synthetic negative and malformed fixtures, and score any newly produced Session against the same separate stage-outcome contract.
+28. At the initial observation and after every observed level completion, inject a deterministic level-entry grounding protocol. It exposes only structural entry facts, requires facts and hypotheses to remain separate in `notes.md`, and makes the agent maintain a revisable temporary goal with an executable `is_goal` predicate, supporting evidence, falsifier, known unknowns, and cheapest discriminating probe.
 
 JSON-over-stdio transport and human-readable event projections remain the next layer over this journal. Competition submission integration, score reconstruction, candidate-model archives, and explicit process resume remain later milestones. The current loop deliberately requires a new empty Session.
 

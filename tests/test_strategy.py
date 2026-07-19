@@ -3,15 +3,23 @@ from pathlib import Path
 from arcengine import FrameData, GameState
 
 from beat_arc_agi_3.schemas import ArcAction, GameObservation
-from beat_arc_agi_3.strategy import render_experiment_context
+from beat_arc_agi_3.strategy import (
+    render_experiment_context,
+    render_strategy_context,
+)
 from beat_arc_agi_3.timeline import JsonlTimeline, ModelPredictionRecord
 
 
-def observation(value: int, *, levels_completed: int = 0) -> GameObservation:
+def observation(
+    value: int,
+    *,
+    levels_completed: int = 0,
+    grid: list[list[int]] | None = None,
+) -> GameObservation:
     return GameObservation.from_frame(
         FrameData(
             game_id="test-game",
-            frame=[[[value]]],
+            frame=[grid or [[value]]],
             state=GameState.NOT_FINISHED,
             levels_completed=levels_completed,
             win_levels=2,
@@ -118,3 +126,69 @@ def test_unchecked_action_is_not_counted_as_a_failed_model_prediction(
 
     assert "online predictions exact=0/0" in context
     assert "unchecked exploratory transitions=1" in context
+
+
+def test_strategy_context_grounds_the_initial_level_entry(tmp_path: Path) -> None:
+    timeline = JsonlTimeline.create(
+        tmp_path / "timeline.jsonl",
+        game_id="test-game",
+    )
+    timeline.initialize(
+        observation(
+            0,
+            grid=[
+                [0, 0, 0],
+                [0, 1, 0],
+                [2, 2, 2],
+            ],
+        )
+    )
+
+    context = render_strategy_context(timeline)
+
+    assert "Level-entry grounding protocol" in context
+    assert "trigger=session_start; level=0/2" in context
+    assert "entry grid shape=3x3; color counts=0:5,1:1,2:3" in context
+    assert "geometric peripheral band width=1" in context
+    assert "peripheral color counts=0:5,2:3" in context
+    assert "interior color counts=1:1" in context
+    assert "legal actions=ACTION1,ACTION2" in context
+    assert "Observed facts" in context
+    assert "Hypotheses" in context
+    assert "Known unknowns" in context
+    assert "Cheapest discriminating probe" in context
+    assert "Temporary goal" in context
+    assert "predicate, evidence, and falsifier" in context
+    assert "Harness experiment evidence" in context
+
+
+def test_strategy_context_repeats_grounding_only_at_real_level_entry(
+    tmp_path: Path,
+) -> None:
+    timeline = JsonlTimeline.create(
+        tmp_path / "timeline.jsonl",
+        game_id="test-game",
+    )
+    timeline.initialize(observation(0))
+    timeline.append(
+        action=ArcAction(action="ACTION1"),
+        after=observation(1),
+        model_revision="test-revision",
+        prediction=prediction(1),
+    )
+
+    assert "Level-entry grounding protocol" not in render_strategy_context(
+        timeline
+    )
+
+    timeline.append(
+        action=ArcAction(action="ACTION2"),
+        after=observation(2, levels_completed=1),
+        model_revision="test-revision",
+        prediction=prediction(2, level_up=True),
+    )
+
+    context = render_strategy_context(timeline)
+
+    assert "Level-entry grounding protocol" in context
+    assert "trigger=transition #1 level_up; level=1/2" in context

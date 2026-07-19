@@ -119,9 +119,21 @@ peripheral-band counts, level-entry distance, and prior same-action indices as
 structural facts rather than semantic labels. Use
 read_file, write_file, and edit_file for durable UTF-8 working material inside
 this session. notes.md is your canonical living scientific scratchpad. Maintain
-and prune it every turn under Confirmed mechanics, Current level, Hypotheses to
-test, Confirmed facts, and Current plan. Never promote a hypothesis to a fact
-without real transition evidence. Prefer exact, narrow edits once a file exists.
+and prune it every turn under Confirmed mechanics, Current level, Level-entry
+grounding, Temporary goal, Hypotheses to test, Confirmed facts, and Current
+plan. Within Level-entry grounding, keep these explicit:
+- Observed facts
+- Hypotheses
+- Known unknowns
+- Cheapest discriminating probe
+When the harness shows the level-entry protocol, complete these structures
+before committing a route, and re-run this protocol after every observed
+level_up. Under Temporary goal, record a predicate, evidence, and falsifier.
+Keep it revisable and encode its best-supported current form in is_goal. Do not
+treat is_goal returning False everywhere as final; if positive goal evidence is
+insufficient, record what evidence is missing and choose the cheapest probe
+that could supply it. Never promote a hypothesis to a fact without real
+transition evidence. Prefer exact, narrow edits once a file exists.
 Before committing, create world_model_v5.py. It must define exactly
 these stateful interfaces: init_state(entry_grid), predict(state, grid, action,
 x=None, y=None) returning (predicted_grid, {"level_up": bool, "dead": bool,
