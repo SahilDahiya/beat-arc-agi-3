@@ -41,7 +41,6 @@ def prediction(
     win: bool = False,
 ) -> ModelPredictionRecord:
     return ModelPredictionRecord(
-        revision="test-revision",
         grid=((value,),),
         level_up=level_up,
         dead=False,
@@ -57,16 +56,21 @@ def populated_timeline(path: Path) -> JsonlTimeline:
     end = observation(4, state=GameState.WIN, levels_completed=1)
     timeline.initialize(start)
     timeline.append(
-        action=simple_action(), after=one, prediction=prediction(1)
+        action=simple_action(),
+        after=one,
+        model_revision="test-revision",
+        prediction=prediction(9),
     )
     timeline.append(
         action=click_action(),
         after=two,
+        model_revision="test-revision",
         prediction=prediction(9, level_up=True),
     )
     timeline.append(
         action=simple_action(),
         after=end,
+        model_revision="test-revision",
         prediction=prediction(4, win=True),
     )
     return timeline
@@ -81,13 +85,13 @@ def test_brief_history_summarizes_all_and_limits_selected_steps(
 
     assert "3 transitions total" in output
     assert "level_ups=1 deaths=0 wins=1" in output
-    assert "model_mispredictions=1" in output
+    assert "model_mismatches=1 unchecked=0" in output
     assert "by-action={1:2, 6:1}" in output
     assert "showing most-recent 2 -> 2 steps" in output
     assert "#0 action=1" not in output
     assert (
         "#1 action=6(x=3,y=7); 1 cells changed; "
-        "model=mispredicted revision=test-revisi"
+        "model=exact revision=test-revisi"
     ) in output
     assert (
         "#2 action=1; 1 cells changed; model=exact revision=test-revisi"
@@ -125,3 +129,26 @@ def test_empty_history_is_explicit(tmp_path: Path) -> None:
 
     assert "0 transitions total" in output
     assert output.endswith("No transitions selected.")
+
+
+def test_history_labels_an_unchecked_probe_without_a_prediction(
+    tmp_path: Path,
+) -> None:
+    timeline = JsonlTimeline.create(
+        tmp_path / "timeline.jsonl",
+        game_id="test-game",
+    )
+    timeline.initialize(observation(0))
+    timeline.append(
+        action=simple_action(),
+        after=observation(7),
+        model_revision="probe-revision",
+        prediction=None,
+    )
+
+    output = asyncio.run(
+        TimelineHistoryReader(timeline).read(HistoryQuery(detail="brief"))
+    )
+
+    assert "model_mismatches=0 unchecked=1" in output
+    assert "model=unchecked revision=probe-revis" in output

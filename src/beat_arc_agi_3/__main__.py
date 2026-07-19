@@ -30,8 +30,8 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         choices=[mode.value for mode in OperationMode],
     )
-    run_parser.add_argument("--max-turns", required=True, type=int)
-    run_parser.add_argument("--max-actions", required=True, type=int)
+    run_parser.add_argument("--max-turns", type=int)
+    run_parser.add_argument("--max-actions", type=int)
 
     auth_parser = subparsers.add_parser(
         "auth",

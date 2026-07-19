@@ -28,15 +28,15 @@ uv run python -m beat_arc_agi_3 auth status
 
 `auth login` prints an OpenAI authorization URL and waits for its loopback callback on `localhost:1455`. The harness stores the resulting credentials at `~/.beat-arc-agi-3/oauth.json`, refreshes expired access tokens when possible, and never reads `OPENAI_API_KEY`. Use `auth logout` to remove the stored credentials.
 
-Every process value is explicit:
+Production runs are unlimited by default:
 
 ```bash
 uv run python -m beat_arc_agi_3 run \
   --game ls20 \
   --session ls20-experiment-001 \
-  --mode online \
-  --max-turns 10 \
-  --max-actions 30
+  --mode online
 ```
 
 The command uses ChatGPT subscription model access and performs real ARC actions. `--session` is a reusable label; each run prefixes it with a UTC timestamp and writes a distinct directory such as `sessions/20260718T153012.123456Z-ls20-experiment-001/`. Process resume is not implemented yet.
+
+For a private diagnostic run, the harness operator may add positive `--max-turns` and/or `--max-actions` caps. These caps are enforced by the outer loop and are never included in agent dependencies or prompts.

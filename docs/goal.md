@@ -11,24 +11,26 @@ The implemented foundation now provides:
 3. Require the agent to terminate by returning a non-empty, typed action queue.
 4. Validate every committed action against the current observation's legal actions.
 5. Preserve Pydantic AI message history across turns in the active Session.
-6. Execute committed queues one real action at a time under explicit turn and action limits.
+6. Execute committed queues one real action at a time, unlimited by default, with optional harness-private turn and action caps for diagnostics.
 7. Drop the remaining queue when a level completes, the game enters `GAME_OVER`, or a later action becomes illegal.
 8. Store each run as an explicit repository-local Session with immutable metadata.
 9. Record the initial observation and each action result in that Session's append-only, game-bound JSONL Timeline.
 10. Expose recent session evidence through brief, full, and animation history views.
 11. Compose a complete real process from explicit settings and process configuration.
 12. Exercise that composition in the default test suite with a subscription-backed model request and a real online ARC action.
-13. Expose new-session process composition through `python -m beat_arc_agi_3 run` with explicit game, reusable session label, mode, and budget arguments; generated Session IDs are UTC timestamped.
+13. Expose new-session process composition through `python -m beat_arc_agi_3 run` with explicit game, reusable session label, mode, and optional private cap arguments; generated Session IDs are UTC timestamped.
 14. Expose the trace-derived Schema Harness `read_file(path, offset=1, limit=2000)` tool over UTF-8 files confined to the active Session.
 15. Give each Schema file tool a separate implementation and expose trace-derived `write_file(path, content)` plus exact `edit_file(path, old_string, new_string, replace_all=false)` with atomic persistence.
 16. Require `world_model_v5.py` to implement the canonical stateful `init_state`, `predict`, and `is_goal` interfaces; invalid revisions never replace the live model.
 17. Execute generated world-model code and ad hoc Python in a read-only, networkless Session sandbox with hard timeouts.
-18. Expose trace-derived `run_backtest`, replay the complete Timeline, and require the exact current model revision and Timeline prefix to be green before commit.
-19. Record a revision-bound prediction with every real action, compare it with reality, and cancel the committed queue at the first model mismatch.
+18. Expose trace-derived `run_backtest`, replay the complete Timeline, and require the exact current model revision and Timeline prefix to be green before accepting a certified plan.
+19. Distinguish certified multi-action plans from exactly one exploratory probe. Record revision-bound predictions for certified actions, preserve an untrusted probe as explicitly unchecked evidence, and cancel a certified queue at the first model mismatch.
 20. Expose trace-derived `run_python` for bounded analysis and `run_bfs` for revision-bound model-space planning.
 21. Persist a strict append-only `events.jsonl` journal with contiguous sequence numbers for session, turn, deliberation, tool, commit, action, mismatch, queue, and terminal run lifecycle evidence.
 22. Derive compact experiment evidence from the Timeline before every deliberation: online prediction accuracy, recent mismatches and actions, actions without level progress, exact observable-state revisits, short cycles, nearest recent visual distance, and the latest counterexample.
 23. Own ChatGPT subscription PKCE login, private credential persistence, and access-token refresh inside the harness, with explicit `openai-codex:` model selection and no API-key or subprocess fallback.
+24. Seed every Session with canonical `notes.md`, inject its current contents into every deliberation, and direct the agent to maintain it as a pruned scientific scratchpad separating facts from hypotheses.
+25. Atomically preserve the exact `world_model_v5.py` revision at every observed level completion in an immutable, journaled `snapshots/cleared_level_N.py` artifact.
 
 JSON-over-stdio transport and human-readable event projections remain the next layer over this journal. Competition submission integration, score reconstruction, candidate-model archives, and explicit process resume remain later milestones. The current loop deliberately requires a new empty Session.
 

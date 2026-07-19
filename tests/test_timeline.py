@@ -47,7 +47,6 @@ def prediction(
     win: bool = False,
 ) -> ModelPredictionRecord:
     return ModelPredictionRecord(
-        revision="abc123",
         grid=((value,),),
         level_up=level_up,
         dead=dead,
@@ -55,7 +54,7 @@ def prediction(
     )
 
 
-def test_timeline_records_whether_the_live_model_mispredicted(
+def test_timeline_records_exact_and_mismatched_model_predictions(
     tmp_path: Path,
 ) -> None:
     timeline = JsonlTimeline.create(
@@ -67,21 +66,45 @@ def test_timeline_records_whether_the_live_model_mispredicted(
     exact = timeline.append(
         action=action(),
         after=observation(1),
+        model_revision="abc123",
         prediction=prediction(1),
     )
     mismatch = timeline.append(
         action=action(),
         after=observation(3),
+        model_revision="abc123",
         prediction=prediction(2),
     )
 
-    assert exact.model_mispredicted is False
-    assert mismatch.model_mispredicted is True
+    assert exact.prediction_status == "exact"
+    assert mismatch.prediction_status == "mismatch"
     reopened = JsonlTimeline(
         tmp_path / "timeline.jsonl",
         game_id="test-game",
     )
-    assert reopened.transitions()[1].prediction.revision == "abc123"
+    assert reopened.transitions()[1].model_revision == "abc123"
+
+
+def test_timeline_records_an_explicitly_unchecked_probe(tmp_path: Path) -> None:
+    timeline = JsonlTimeline.create(
+        tmp_path / "timeline.jsonl",
+        game_id="test-game",
+    )
+    timeline.initialize(observation(0))
+
+    transition = timeline.append(
+        action=action(),
+        after=observation(7),
+        model_revision="dirty-revision",
+        prediction=None,
+    )
+
+    assert transition.model_revision == "dirty-revision"
+    assert transition.prediction is None
+    assert transition.prediction_status == "unchecked"
+    assert JsonlTimeline(
+        tmp_path / "timeline.jsonl", game_id="test-game"
+    ).transitions() == (transition,)
 
 
 def test_timeline_persists_initial_observation_and_linear_transitions(
@@ -95,11 +118,13 @@ def test_timeline_persists_initial_observation_and_linear_transitions(
     first = timeline.append(
         action=action(),
         after=observation(1, levels_completed=1),
+        model_revision="abc123",
         prediction=prediction(1, level_up=True),
     )
     second = timeline.append(
         action=action("ACTION6"),
         after=observation(2, state=GameState.WIN, levels_completed=1),
+        model_revision="abc123",
         prediction=prediction(2, win=True),
     )
 
@@ -138,6 +163,7 @@ def test_timeline_requires_initial_observation_before_append(
         timeline.append(
             action=action(),
             after=observation(1),
+            model_revision="abc123",
             prediction=prediction(1),
         )
 
@@ -167,6 +193,7 @@ def test_timeline_derives_death_from_the_result_observation(
     transition = timeline.append(
         action=action(),
         after=observation(1, state=GameState.GAME_OVER),
+        model_revision="abc123",
         prediction=prediction(1, dead=True),
     )
 
@@ -189,6 +216,7 @@ def test_timeline_rejects_a_corrupt_persisted_index(tmp_path: Path) -> None:
     timeline.append(
         action=action(),
         after=observation(1),
+        model_revision="abc123",
         prediction=prediction(1),
     )
     corrupt = {
@@ -196,6 +224,7 @@ def test_timeline_rejects_a_corrupt_persisted_index(tmp_path: Path) -> None:
         "index": 9,
         "action": action().model_dump(mode="json"),
         "after": observation(2).model_dump(mode="json"),
+        "model_revision": "abc123",
         "prediction": prediction(2).model_dump(mode="json"),
     }
     with path.open("a", encoding="utf-8") as handle:
@@ -233,6 +262,7 @@ def test_timeline_append_does_not_reload_persisted_history(
     transition = timeline.append(
         action=action(),
         after=observation(1),
+        model_revision="abc123",
         prediction=prediction(1),
     )
 

@@ -26,7 +26,6 @@ def prediction(
     level_up: bool = False,
 ) -> ModelPredictionRecord:
     return ModelPredictionRecord(
-        revision="test-revision",
         grid=((value,),),
         level_up=level_up,
         dead=False,
@@ -45,11 +44,13 @@ def test_experiment_context_exposes_counterexample_and_observable_cycle(
     timeline.append(
         action=ArcAction(action="ACTION1"),
         after=observation(1),
+        model_revision="test-revision",
         prediction=prediction(1),
     )
     timeline.append(
         action=ArcAction(action="ACTION2"),
         after=observation(0),
+        model_revision="test-revision",
         prediction=prediction(9),
     )
 
@@ -79,11 +80,13 @@ def test_experiment_context_resets_stagnation_after_level_progress(
     timeline.append(
         action=ArcAction(action="ACTION1"),
         after=observation(1),
+        model_revision="test-revision",
         prediction=prediction(1),
     )
     timeline.append(
         action=ArcAction(action="ACTION1"),
         after=observation(2, levels_completed=1),
+        model_revision="test-revision",
         prediction=prediction(2, level_up=True),
     )
 
@@ -93,3 +96,24 @@ def test_experiment_context_resets_stagnation_after_level_progress(
     assert "actions without level progress=0" in context
     assert "current observable state visits=1" in context
     assert "observable-state cycle" not in context
+
+
+def test_unchecked_probe_is_not_counted_as_a_failed_model_prediction(
+    tmp_path: Path,
+) -> None:
+    timeline = JsonlTimeline.create(
+        tmp_path / "timeline.jsonl",
+        game_id="test-game",
+    )
+    timeline.initialize(observation(0))
+    timeline.append(
+        action=ArcAction(action="ACTION1"),
+        after=observation(9),
+        model_revision="test-revision",
+        prediction=None,
+    )
+
+    context = render_experiment_context(timeline)
+
+    assert "online predictions exact=0/0" in context
+    assert "unchecked exploratory transitions=1" in context

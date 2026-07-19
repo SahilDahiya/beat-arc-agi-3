@@ -108,25 +108,37 @@ You are an ARC-AGI-3 deliberation agent. Infer useful next actions from the
 current observation and recorded real transitions. You may inspect history with
 read_history and analyze read-only Session evidence with run_python. Use
 read_file, write_file, and edit_file for durable UTF-8 working material inside
-this session. Prefer exact, narrow edits once a file exists.
-Before committing, create and backtest world_model_v5.py. It must define exactly
+this session. notes.md is your canonical living scientific scratchpad. Maintain
+and prune it every turn under Confirmed mechanics, Current level, Hypotheses to
+test, Confirmed facts, and Current plan. Never promote a hypothesis to a fact
+without real transition evidence. Prefer exact, narrow edits once a file exists.
+Before committing, create world_model_v5.py. It must define exactly
 these stateful interfaces: init_state(entry_grid), predict(state, grid, action,
 x=None, y=None) returning (predicted_grid, {"level_up": bool, "dead": bool,
 "win": bool}, next_state), and is_goal(state, grid) returning bool. Model state
 must be JSON-serializable. predicted_grid must be a rectangular nested list of
 integer color values from 0 through 15 with the observation's shape; never
 return hexadecimal strings. After every model revision, call run_backtest and
-repair the earliest mismatch until the current revision is green.
+repair the earliest mismatch until the current revision is green whenever the
+existing evidence is sufficient.
 Treat a green backtest as finite historical consistency, never proof that the
 mechanism, representation, or goal is correct. Prefer general object and latent
 state rules. Do not overfit with transition-index or action-occurrence special
 cases unless the recorded evidence demonstrates that hidden state. Keep
 observations separate from hypotheses, actively falsify unsupported goal and
 affordance assumptions, and use the harness experiment evidence in each turn.
+Before committing a long action sequence, distinguish the playable region from
+persistent HUD, status, inventory, or progress indicators and encode that
+separation in the model when the evidence supports it.
 Use run_bfs only on that green revision when model-space search is useful; its
 returned plan is valid only for the revision named in the result.
-When ready, call commit_actions with a non-empty ordered queue, the reason for
-the queue, and a suggestion for the next deliberation turn. Only commit actions
+When ready, call commit_actions with kind, a non-empty ordered queue, the reason
+for the queue, and a suggestion for the next deliberation turn. Use kind=plan
+for a certified queue; plans require a green current revision. Use kind=probe
+only for one discriminating action when no evidence-backed goal-reaching plan
+exists. A probe may proceed unchecked when the installed model cannot yet
+become green from existing evidence. State the probe's expected observation
+and falsifier in reason. Only commit actions
 listed as legal in the current observation. ACTION6 is a click and requires x/y
 coordinates; parameterless actions reject coordinates. A commit ends this turn,
 so do not request more tools alongside it. If no evidence-backed goal-reaching
@@ -419,10 +431,6 @@ def build_agent(
     async def validate_commit(
         ctx: RunContext[AgentDeps], output: CommitActions
     ) -> CommitActions:
-        try:
-            ctx.deps.synthesis.require_green()
-        except (BacktestRequiredError, WorldModelError) as exc:
-            raise ModelRetry(str(exc)) from exc
         legal = set(ctx.deps.observation.available_action_names)
         unavailable = sorted(
             {action.action for action in output.actions if action.action not in legal}
@@ -432,12 +440,19 @@ def build_agent(
                 f"Committed unavailable actions {unavailable}; "
                 f"legal actions are {sorted(legal)}"
             )
-        try:
-            ctx.deps.synthesis.preflight_actions(output.actions)
-        except (BacktestRequiredError, WorldModelError) as exc:
-            raise ModelRetry(
-                f"Committed actions failed world-model preflight: {exc}"
-            ) from exc
+        if output.kind == "probe":
+            try:
+                ctx.deps.synthesis.inspect_model()
+            except WorldModelError as exc:
+                raise ModelRetry(str(exc)) from exc
+        else:
+            try:
+                ctx.deps.synthesis.require_green()
+                ctx.deps.synthesis.preflight_actions(output.actions)
+            except (BacktestRequiredError, WorldModelError) as exc:
+                raise ModelRetry(
+                    f"Committed actions failed world-model preflight: {exc}"
+                ) from exc
         return output
 
     return agent

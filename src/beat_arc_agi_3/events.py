@@ -92,6 +92,7 @@ class BacktestCompletedEvent(_Event):
 
 class CommitAcceptedEvent(_Event):
     type: Literal["commit_accepted"] = "commit_accepted"
+    kind: Literal["plan", "probe"]
     actions: tuple[ArcAction, ...] = Field(min_length=1)
     reason: str = Field(min_length=1)
     suggestion: str = Field(min_length=1)
@@ -102,7 +103,8 @@ class ActionStartedEvent(_Event):
     action_number: int = Field(ge=1)
     transition_index: int = Field(ge=0)
     action: ArcAction
-    prediction_revision: str = Field(min_length=1)
+    model_revision: str = Field(min_length=1)
+    prediction_mode: Literal["certified", "unchecked"]
 
 
 class ActionCompletedEvent(_Event):
@@ -110,13 +112,21 @@ class ActionCompletedEvent(_Event):
     action_number: int = Field(ge=1)
     transition_index: int = Field(ge=0)
     action: ArcAction
-    prediction_revision: str = Field(min_length=1)
-    prediction_exact: bool
+    model_revision: str = Field(min_length=1)
+    prediction_status: Literal["exact", "mismatch", "unchecked"]
     state: GameState
     levels_completed: int = Field(ge=0)
     level_up: bool
     dead: bool
     win: bool
+
+
+class WorldModelSnapshottedEvent(_Event):
+    type: Literal["world_model_snapshotted"] = "world_model_snapshotted"
+    cleared_level: int = Field(ge=0)
+    revision: str = Field(min_length=1)
+    prediction_status: Literal["exact", "mismatch", "unchecked"]
+    path: str = Field(min_length=1)
 
 
 class PredictionMismatchEvent(_Event):
@@ -180,6 +190,7 @@ ArcEvent = Annotated[
     | CommitAcceptedEvent
     | ActionStartedEvent
     | ActionCompletedEvent
+    | WorldModelSnapshottedEvent
     | PredictionMismatchEvent
     | QueueCancelledEvent
     | TurnCompletedEvent
@@ -321,4 +332,5 @@ __all__ = [
     "TurnCompletedEvent",
     "TurnStartedEvent",
     "WorldModelInstalledEvent",
+    "WorldModelSnapshottedEvent",
 ]

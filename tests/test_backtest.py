@@ -33,12 +33,18 @@ def is_goal(state, grid):
 '''.lstrip()
 
 
-def observation(value: int) -> GameObservation:
+def observation(
+    value: int,
+    *,
+    state: GameState = GameState.NOT_FINISHED,
+    levels_completed: int = 0,
+) -> GameObservation:
     return GameObservation.from_frame(
         FrameData(
             game_id="test-game",
             frame=[[[value]]],
-            state=GameState.NOT_FINISHED,
+            state=state,
+            levels_completed=levels_completed,
             available_actions=[1],
         )
     )
@@ -61,8 +67,8 @@ def build_harness(
         timeline.append(
             action=ArcAction(action="ACTION1"),
             after=observation(value),
+            model_revision="setup",
             prediction=ModelPredictionRecord(
-                revision="setup",
                 grid=((value,),),
                 level_up=False,
                 dead=False,
@@ -154,8 +160,8 @@ def test_new_timeline_evidence_invalidates_green_status(tmp_path: Path) -> None:
     harness.timeline.append(
         action=ArcAction(action="ACTION1"),
         after=observation(2),
+        model_revision="setup",
         prediction=ModelPredictionRecord(
-            revision="setup",
             grid=((2,),),
             level_up=False,
             dead=False,
@@ -178,6 +184,7 @@ def test_exact_online_prediction_advances_green_trust(tmp_path: Path) -> None:
     transition = harness.timeline.append(
         action=ArcAction(action="ACTION1"),
         after=observation(1),
+        model_revision=pending.revision,
         prediction=pending.record,
     )
 
@@ -193,9 +200,68 @@ def test_online_misprediction_invalidates_green_trust(tmp_path: Path) -> None:
     transition = harness.timeline.append(
         action=ArcAction(action="ACTION1"),
         after=observation(9),
+        model_revision=pending.revision,
         prediction=pending.record,
     )
 
     assert harness.observe(pending, transition) is False
     with pytest.raises(BacktestRequiredError, match="has a mismatch"):
         harness.require_green()
+
+
+def test_backtest_ignores_terminal_grid_and_reinitializes_from_reality(
+    tmp_path: Path,
+) -> None:
+    source = '''
+def init_state(entry_grid):
+    return {"value": entry_grid[0][0]}
+
+
+def predict(state, grid, action, x=None, y=None):
+    value = state["value"] + 1
+    return (
+        [[value]],
+        {"level_up": state["value"] == 0, "dead": False, "win": False},
+        {"value": value},
+    )
+
+
+def is_goal(state, grid):
+    return False
+'''.lstrip()
+    harness = build_harness(tmp_path, [], source=source)
+    harness.timeline.append(
+        action=ArcAction(action="ACTION1"),
+        after=observation(9, levels_completed=1),
+        model_revision="setup",
+        prediction=None,
+    )
+    harness.timeline.append(
+        action=ArcAction(action="ACTION1"),
+        after=observation(10, levels_completed=1),
+        model_revision="setup",
+        prediction=None,
+    )
+
+    report = harness.run_backtest()
+
+    assert report.status == "green"
+    assert report.exact_transitions == 2
+    assert harness.require_green().state == {"value": 10}
+
+
+def test_backtest_still_requires_exact_terminal_flags(tmp_path: Path) -> None:
+    harness = build_harness(tmp_path, [])
+    harness.timeline.append(
+        action=ArcAction(action="ACTION1"),
+        after=observation(9, levels_completed=1),
+        model_revision="setup",
+        prediction=None,
+    )
+
+    report = harness.run_backtest()
+
+    assert report.status == "mismatch"
+    assert report.mismatch is not None
+    assert report.mismatch.differing_cells == 0
+    assert report.mismatch.actual_flags.level_up is True

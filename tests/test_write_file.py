@@ -108,6 +108,20 @@ def test_write_file_rejects_paths_outside_the_session(tmp_path: Path) -> None:
     assert not (tmp_path / "secret.txt").exists()
 
 
+def test_write_file_cannot_replace_immutable_level_snapshots(
+    tmp_path: Path,
+) -> None:
+    workspace = SessionWorkspace(tmp_path)
+
+    with pytest.raises(WriteFileError, match="path not writable"):
+        workspace.write_file(
+            WriteFileQuery(
+                path="snapshots/cleared_level_0.py",
+                content="replacement",
+            )
+        )
+
+
 def test_write_file_rejects_a_symlink_escape(tmp_path: Path) -> None:
     workspace_path = tmp_path / "session"
     workspace_path.mkdir()

@@ -17,28 +17,30 @@ from beat_arc_agi_3.events import (
     RunInterruptedEvent,
     TurnCompletedEvent,
     TurnStartedEvent,
+    WorldModelSnapshottedEvent,
 )
 from beat_arc_agi_3.history import TimelineHistoryReader
 from beat_arc_agi_3.runner import deliberate
 from beat_arc_agi_3.schemas import CommitActions, GameObservation
 from beat_arc_agi_3.session import Session
 from beat_arc_agi_3.strategy import render_experiment_context
+from beat_arc_agi_3.synthesis import BacktestRequiredError
 
 
 StopReason = Literal["win", "max_actions", "max_turns", "no_legal_actions"]
 
 
 class LoopPolicy(BaseModel):
-    """Explicit bounds for one ARC agent process."""
+    """Harness-private optional diagnostic bounds for one ARC process."""
 
     model_config = ConfigDict(frozen=True)
 
-    max_turns: int = Field(ge=1)
-    max_actions: int = Field(ge=1)
+    max_turns: int | None = Field(default=None, ge=1)
+    max_actions: int | None = Field(default=None, ge=1)
 
 
 class LoopResult(BaseModel):
-    """Terminal accounting for one bounded loop run."""
+    """Terminal accounting for one loop run."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -56,7 +58,7 @@ async def run_agent_loop(
     session: Session,
     policy: LoopPolicy,
 ) -> LoopResult:
-    """Observe, deliberate, execute, and record under explicit process bounds."""
+    """Observe, deliberate, execute, and record with optional private caps."""
 
     if session.timeline.initial_observation is not None:
         raise ValueError("agent loop requires a new, uninitialized session")
@@ -107,9 +109,12 @@ async def run_agent_loop(
         while True:
             if current.state is GameState.WIN:
                 return complete("win")
-            if actions_taken >= policy.max_actions:
+            if (
+                policy.max_actions is not None
+                and actions_taken >= policy.max_actions
+            ):
                 return complete("max_actions")
-            if turns >= policy.max_turns:
+            if policy.max_turns is not None and turns >= policy.max_turns:
                 return complete("max_turns")
             if not current.available_actions:
                 return complete("no_legal_actions")
@@ -159,7 +164,10 @@ async def run_agent_loop(
             turn_start = current
 
             for action in commit.actions:
-                if actions_taken >= policy.max_actions:
+                if (
+                    policy.max_actions is not None
+                    and actions_taken >= policy.max_actions
+                ):
                     queue_stop = "the action budget was exhausted"
                     queue_cancel_reason = "max_actions"
                     break
@@ -171,7 +179,17 @@ async def run_agent_loop(
                     queue_cancel_reason = "illegal_action"
                     break
 
-                pending_prediction = session.synthesis.predict_action(action)
+                pending_prediction = None
+                model_revision = session.synthesis.model_revision()
+                if commit.kind == "plan":
+                    pending_prediction = session.synthesis.predict_action(action)
+                else:
+                    try:
+                        pending_prediction = session.synthesis.predict_action(action)
+                    except BacktestRequiredError:
+                        pass
+                if pending_prediction is not None:
+                    model_revision = pending_prediction.revision
                 transition_index = len(session.timeline.transitions())
                 action_number = actions_taken + 1
                 session.events.append(
@@ -184,19 +202,31 @@ async def run_agent_loop(
                         action_number=action_number,
                         transition_index=transition_index,
                         action=action,
-                        prediction_revision=pending_prediction.revision,
+                        model_revision=model_revision,
+                        prediction_mode=(
+                            "certified"
+                            if pending_prediction is not None
+                            else "unchecked"
+                        ),
                     ),
                 )
                 after = adapter.apply(action)
                 transition = session.timeline.append(
                     action=action,
                     after=after,
-                    prediction=pending_prediction.record,
+                    model_revision=model_revision,
+                    prediction=(
+                        pending_prediction.record
+                        if pending_prediction is not None
+                        else None
+                    ),
                 )
-                prediction_matched = session.synthesis.observe(
-                    pending_prediction,
-                    transition,
-                )
+                prediction_status = transition.prediction_status
+                if pending_prediction is not None:
+                    session.synthesis.observe(
+                        pending_prediction,
+                        transition,
+                    )
                 current = after
                 executed_count += 1
                 actions_taken += 1
@@ -205,14 +235,13 @@ async def run_agent_loop(
                     event=ActionCompletedEvent(
                         summary=(
                             f"Action {action_number} completed as transition "
-                            f"{transition.index}; prediction "
-                            f"{'exact' if prediction_matched else 'mismatched'}"
+                            f"{transition.index}; prediction {prediction_status}"
                         ),
                         action_number=action_number,
                         transition_index=transition.index,
                         action=action,
-                        prediction_revision=pending_prediction.revision,
-                        prediction_exact=prediction_matched,
+                        model_revision=model_revision,
+                        prediction_status=prediction_status,
                         state=current.state,
                         levels_completed=current.levels_completed,
                         level_up=transition.level_up,
@@ -221,26 +250,47 @@ async def run_agent_loop(
                     ),
                 )
 
+                if transition.level_up:
+                    cleared_level = transition.before.levels_completed
+                    snapshot = session.snapshot_world_model(
+                        cleared_level=cleared_level,
+                        revision=model_revision,
+                    )
+                    session.events.append(
+                        turn=turns,
+                        event=WorldModelSnapshottedEvent(
+                            summary=(
+                                f"Snapshotted world model revision "
+                                f"{model_revision[:12]} after clearing level "
+                                f"{cleared_level}"
+                            ),
+                            cleared_level=cleared_level,
+                            revision=model_revision,
+                            prediction_status=prediction_status,
+                            path=snapshot.relative_to(session.path).as_posix(),
+                        ),
+                    )
+
                 if transition.win:
                     queue_stop = "the game reached WIN"
                     queue_cancel_reason = "win"
                     break
-                if not prediction_matched:
+                if prediction_status == "mismatch":
                     session.events.append(
                         turn=turns,
                         event=PredictionMismatchEvent(
                             summary=(
                                 f"World model revision "
-                                f"{pending_prediction.revision[:12]} "
+                                f"{model_revision[:12]} "
                                 f"mispredicted transition {transition.index}"
                             ),
                             transition_index=transition.index,
-                            revision=pending_prediction.revision,
+                            revision=model_revision,
                         ),
                     )
                     queue_stop = (
                         f"world model revision "
-                        f"{pending_prediction.revision[:12]} mispredicted "
+                        f"{model_revision[:12]} mispredicted "
                         f"transition {transition.index}; remaining actions "
                         "were dropped"
                     )

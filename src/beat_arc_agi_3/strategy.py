@@ -95,11 +95,22 @@ def render_experiment_context(timeline: JsonlTimeline) -> str:
             )
     nearest = min(nearest_candidates, default=None)
 
-    exact = sum(not item.model_mispredicted for item in transitions)
+    exact = sum(item.prediction_status == "exact" for item in transitions)
+    unchecked = sum(item.prediction_status == "unchecked" for item in transitions)
+    certified = len(transitions) - unchecked
     recent = transitions[-RECENT_PREDICTION_WINDOW:]
-    recent_mismatches = sum(item.model_mispredicted for item in recent)
+    recent_certified = tuple(
+        item for item in recent if item.prediction_status != "unchecked"
+    )
+    recent_mismatches = sum(
+        item.prediction_status == "mismatch" for item in recent_certified
+    )
     latest_mismatch = next(
-        (item for item in reversed(transitions) if item.model_mispredicted),
+        (
+            item
+            for item in reversed(transitions)
+            if item.prediction_status == "mismatch"
+        ),
         None,
     )
 
@@ -107,9 +118,10 @@ def render_experiment_context(timeline: JsonlTimeline) -> str:
         "Harness experiment evidence:",
         (
             f"- transitions={len(transitions)}; online predictions "
-            f"exact={exact}/{len(transitions)}; recent prediction "
-            f"mismatches={recent_mismatches}/{len(recent)}"
+            f"exact={exact}/{certified}; recent prediction "
+            f"mismatches={recent_mismatches}/{len(recent_certified)}"
         ),
+        f"- unchecked exploratory transitions={unchecked}",
         (
             "- actions without level progress="
             f"{_actions_without_level_progress(transitions)}; current "

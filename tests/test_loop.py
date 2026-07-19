@@ -64,8 +64,11 @@ class InterruptingEnvironment(FakeEnvironment):
         raise KeyboardInterrupt
 
 
-def commit(actions: list[dict[str, object]]) -> dict[str, object]:
+def commit(
+    actions: list[dict[str, object]], *, kind: str = "plan"
+) -> dict[str, object]:
     return {
+        "kind": kind,
         "actions": actions,
         "reason": "Execute the shortest supported plan.",
         "suggestion": "Inspect the resulting transition.",
@@ -139,7 +142,7 @@ def test_loop_drops_queue_suffix_on_level_up_and_reasons_again(
             adapter=adapter,
             initial_observation=adapter.reset(),
             session=session,
-            policy=LoopPolicy(max_turns=5, max_actions=5),
+            policy=LoopPolicy(),
         )
     )
 
@@ -164,6 +167,7 @@ def test_loop_drops_queue_suffix_on_level_up_and_reasons_again(
         "commit_accepted",
         "action_started",
         "action_completed",
+        "world_model_snapshotted",
         "queue_cancelled",
         "turn_completed",
         "turn_started",
@@ -174,6 +178,7 @@ def test_loop_drops_queue_suffix_on_level_up_and_reasons_again(
         "commit_accepted",
         "action_started",
         "action_completed",
+        "world_model_snapshotted",
         "queue_cancelled",
         "turn_completed",
         "run_completed",
@@ -181,8 +186,36 @@ def test_loop_drops_queue_suffix_on_level_up_and_reasons_again(
     assert [entry.seq for entry in session.events.entries()] == list(
         range(1, len(event_types) + 1)
     )
+    snapshots = sorted((session.path / "snapshots").glob("*.py"))
+    assert [path.name for path in snapshots] == [
+        "cleared_level_0.py",
+        "cleared_level_1.py",
+    ]
+    assert all(
+        path.read_text(encoding="utf-8")
+        == (session.path / "world_model_v5.py").read_text(encoding="utf-8")
+        for path in snapshots
+    )
+    snapshot_events = [
+        entry.event
+        for entry in session.events.entries()
+        if entry.event.type == "world_model_snapshotted"
+    ]
+    assert [event.cleared_level for event in snapshot_events] == [0, 1]
+    assert [event.prediction_status for event in snapshot_events] == [
+        "exact",
+        "mismatch",
+    ]
+    assert all(event.revision for event in snapshot_events)
     reopened = Session.open(sessions_root=tmp_path, session_id="run-001")
     assert reopened.events.entries() == session.events.entries()
+
+
+def test_loop_policy_is_unbounded_by_default() -> None:
+    policy = LoopPolicy()
+
+    assert policy.max_turns is None
+    assert policy.max_actions is None
 
 
 def test_loop_honors_the_total_action_limit(tmp_path: Path) -> None:
@@ -275,6 +308,8 @@ def test_loop_prompts_with_current_experiment_evidence(tmp_path: Path) -> None:
     assert "Harness experiment evidence" in requests[0]
     assert "online predictions exact=0/0" in requests[0]
     assert "smallest discriminating experiment" in requests[0]
+    assert "max_turns" not in requests[0]
+    assert "max_actions" not in requests[0]
 
 
 def test_loop_cancels_queue_suffix_after_model_misprediction(
@@ -329,7 +364,7 @@ def test_loop_cancels_queue_suffix_after_model_misprediction(
     assert result.stop_reason == "max_turns"
     assert result.actions == 1
     assert len(environment.actions) == 1
-    assert session.timeline.transitions()[0].model_mispredicted is True
+    assert session.timeline.transitions()[0].prediction_status == "mismatch"
     mismatch_events = [
         entry.event
         for entry in session.events.entries()
@@ -343,6 +378,60 @@ def test_loop_cancels_queue_suffix_after_model_misprediction(
         and entry.event.reason == "prediction_mismatch"
         for entry in session.events.entries()
     )
+
+
+def test_loop_records_an_untrusted_one_action_probe_as_unchecked(
+    tmp_path: Path,
+) -> None:
+    environment = FakeEnvironment([frame(9)])
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    "commit_actions",
+                    commit([{"action": "ACTION1"}], kind="probe"),
+                )
+            ]
+        )
+
+    session = create_session(
+        tmp_path,
+        world_model=(
+            "def init_state(entry_grid):\n"
+            "    return {}\n\n"
+            "def predict(state, grid, action, x=None, y=None):\n"
+            "    return [[grid[0][0] + 1]], "
+            "{\"level_up\": False, \"dead\": False, "
+            "\"win\": False}, state\n\n"
+            "def is_goal(state, grid):\n"
+            "    return False\n"
+        ),
+    )
+    adapter = ArcGameAdapter(environment)
+
+    result = asyncio.run(
+        run_agent_loop(
+            agent=build_agent(FunctionModel(model)),
+            adapter=adapter,
+            initial_observation=adapter.reset(),
+            session=session,
+            policy=LoopPolicy(max_turns=1, max_actions=1),
+        )
+    )
+
+    assert result.actions == 1
+    transition = session.timeline.transitions()[0]
+    assert transition.prediction is None
+    assert transition.prediction_status == "unchecked"
+    event_types = [entry.event.type for entry in session.events.entries()]
+    assert "prediction_mismatch" not in event_types
+    completed = next(
+        entry.event
+        for entry in session.events.entries()
+        if entry.event.type == "action_completed"
+    )
+    assert completed.prediction_status == "unchecked"
 
 
 def test_loop_persists_interruption_after_action_started(tmp_path: Path) -> None:

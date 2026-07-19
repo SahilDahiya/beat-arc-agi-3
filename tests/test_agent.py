@@ -4,7 +4,14 @@ from dataclasses import dataclass, field
 import pytest
 from arcengine import FrameData, GameState
 from pydantic import SecretStr
-from pydantic_ai import ModelMessage, ModelResponse, ToolCallPart, models
+from pydantic_ai import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    ToolCallPart,
+    UserPromptPart,
+    models,
+)
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from beat_arc_agi_3.agent import build_agent, build_openai_model
@@ -49,6 +56,10 @@ class RecordingWorkspace:
     def has_file(self, path: str) -> bool:
         return path in self.existing_files
 
+    def read_text(self, path: str) -> str:
+        assert path == "notes.md"
+        return "# Notes\n\n## Confirmed mechanics\n- action 1 moves up\n"
+
     def read_file(self, query: ReadFileQuery) -> str:
         self.read_calls.append(query)
         return "notes.md (1 lines):\n1\tconfirmed"
@@ -68,6 +79,11 @@ class RecordingSynthesis:
     green: bool = True
     backtest_calls: list[int] = field(default_factory=list)
     preflight_calls: list[tuple[str, ...]] = field(default_factory=list)
+    inspect_calls: int = 0
+
+    def inspect_model(self) -> str:
+        self.inspect_calls += 1
+        return "test-revision"
 
     def model_revision(self) -> str:
         return "test-revision"
@@ -152,8 +168,11 @@ def observation(*available_actions: int) -> GameObservation:
     )
 
 
-def commit_args(action: str = "ACTION1") -> dict[str, object]:
+def commit_args(
+    action: str = "ACTION1", *, kind: str = "plan"
+) -> dict[str, object]:
     return {
+        "kind": kind,
         "actions": [
             {
                 "action": action,
@@ -419,6 +438,39 @@ def test_agent_must_create_and_backtest_world_model_before_committing() -> None:
     assert synthesis.backtest_calls == [2]
 
 
+def test_agent_accepts_one_probe_with_an_installed_untrusted_model() -> None:
+    synthesis = RecordingSynthesis(green=False)
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    "commit_actions",
+                    commit_args(kind="probe"),
+                )
+            ]
+        )
+
+    deps = AgentDeps(
+        observation=observation(1),
+        history=RecordingHistory(),
+        workspace=RecordingWorkspace(),
+        synthesis=synthesis,
+        events=RecordingEvents(),
+        turn=1,
+    )
+
+    result = asyncio.run(
+        deliberate(
+            build_agent(FunctionModel(model)), deps, MemoryConversation()
+        )
+    )
+
+    assert result.kind == "probe"
+    assert synthesis.inspect_calls == 1
+    assert synthesis.preflight_calls == []
+
+
 def test_deliberation_reuses_session_message_history() -> None:
     message_counts: list[int] = []
 
@@ -442,6 +494,39 @@ def test_deliberation_reuses_session_message_history() -> None:
 
     assert message_counts == [1, 3]
     assert len(conversation.messages()) == 6
+
+
+def test_deliberation_injects_current_notes_every_turn() -> None:
+    prompts: list[str] = []
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        request = messages[-1]
+        assert isinstance(request, ModelRequest)
+        prompt = request.parts[-1]
+        assert isinstance(prompt, UserPromptPart)
+        prompts.append(prompt.content)
+        return ModelResponse(parts=[ToolCallPart("commit_actions", commit_args())])
+
+    deps = AgentDeps(
+        observation=observation(1),
+        history=RecordingHistory(),
+        workspace=RecordingWorkspace(),
+        synthesis=RecordingSynthesis(),
+        events=RecordingEvents(),
+        turn=1,
+    )
+
+    asyncio.run(
+        deliberate(
+            build_agent(FunctionModel(model)),
+            deps,
+            MemoryConversation(),
+        )
+    )
+
+    assert len(prompts) == 1
+    assert "Your notes (notes.md; maintain and prune this every turn):" in prompts[0]
+    assert "## Confirmed mechanics\n- action 1 moves up" in prompts[0]
 
 
 def test_agent_reads_a_workspace_file_then_commits() -> None:

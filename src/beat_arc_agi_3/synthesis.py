@@ -95,7 +95,6 @@ class PendingModelPrediction:
     @property
     def record(self) -> ModelPredictionRecord:
         return ModelPredictionRecord(
-            revision=self.revision,
             grid=self.prediction.grid,
             level_up=self.prediction.flags.level_up,
             dead=self.prediction.flags.dead,
@@ -125,6 +124,11 @@ class SynthesisHarness:
         """Return the exact revision of the installed generated program."""
 
         return self.runtime.revision
+
+    def inspect_model(self) -> str:
+        """Require an installed interface-valid model and return its revision."""
+
+        return self.runtime.inspect().revision
 
     def run_backtest(self, *, max_details: int = 1) -> BacktestReport:
         if max_details < 0 or max_details > 100:
@@ -165,8 +169,12 @@ class SynthesisHarness:
                 self._last_report = report
                 self._trust = None
                 return report
-            state = prediction.state
-            current_grid = prediction.grid
+            if transition.level_up or transition.dead or transition.win:
+                state = runtime.init_state(transition.after.grid)
+                current_grid = transition.after.grid
+            else:
+                state = prediction.state
+                current_grid = prediction.grid
 
         current_observation = transitions[-1].after if transitions else initial
         for action in self._smoke_actions(current_observation.available_action_names):
@@ -325,8 +333,16 @@ class SynthesisHarness:
         self._trust = BacktestTrust(
             revision=pending.revision,
             timeline_transitions=transition_count,
-            state=pending.prediction.state,
-            grid=pending.prediction.grid,
+            state=(
+                self.runtime.init_state(transition.after.grid)
+                if transition.level_up or transition.dead or transition.win
+                else pending.prediction.state
+            ),
+            grid=(
+                transition.after.grid
+                if transition.level_up or transition.dead or transition.win
+                else pending.prediction.grid
+            ),
         )
         return True
 
@@ -337,14 +353,19 @@ class SynthesisHarness:
         *,
         max_details: int,
     ) -> BacktestMismatch | None:
-        differences = SynthesisHarness._grid_differences(
-            predicted=prediction.grid,
-            actual=transition.after.grid,
-        )
         actual_flags = PredictedFlags(
             level_up=transition.level_up,
             dead=transition.dead,
             win=transition.win,
+        )
+        terminal = transition.level_up or transition.dead or transition.win
+        differences = (
+            []
+            if terminal
+            else SynthesisHarness._grid_differences(
+                predicted=prediction.grid,
+                actual=transition.after.grid,
+            )
         )
         if not differences and prediction.flags == actual_flags:
             return None

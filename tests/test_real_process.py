@@ -39,8 +39,16 @@ def test_real_model_executes_one_action_in_real_arcade() -> None:
         assert persisted.metadata.game_id.startswith("ls20-")
         assert len(transitions) == 1
         assert transitions[0].after.game_id == persisted.metadata.game_id
-        assert transitions[0].prediction.revision
-        assert isinstance(transitions[0].model_mispredicted, bool)
+        transition = transitions[0]
+        assert transition.model_revision
+        assert transition.prediction_status in {
+            "exact",
+            "mismatch",
+            "unchecked",
+        }
+        assert (transition.prediction is None) is (
+            transition.prediction_status == "unchecked"
+        )
         assert persisted.conversation.messages()
     finally:
         if session_path.exists():

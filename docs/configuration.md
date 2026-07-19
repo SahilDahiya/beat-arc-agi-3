@@ -8,7 +8,7 @@ The harness owns its ChatGPT subscription OAuth flow. Run `uv run python -m beat
 
 For the current repository-local process, `.env` sets `SESSIONS_ROOT=./sessions`. `Settings` resolves it against the repository root and rejects paths outside or below that root. The runtime directory is ignored by Git.
 
-Each process must receive an explicit session ID and choose exactly one operation: create a new session or open an existing one. A session stores `session.json`, `messages.jsonl`, `timeline.jsonl`, and `events.jsonl` under `sessions/<session-id>/`. Environment history is generated from the Timeline; operational and decision history is reconstructed from the append-only event journal. Neither has a mutable duplicate. The current execution loop accepts only a newly created empty Session; process-level environment resume remains later work.
+Each process must receive an explicit session ID and choose exactly one operation: create a new session or open an existing one. A session stores `session.json`, `messages.jsonl`, `timeline.jsonl`, `events.jsonl`, canonical `notes.md`, the live `world_model_v5.py`, and cleared-level snapshots under `sessions/<session-id>/`. Environment history is generated from the Timeline; operational and decision history is reconstructed from the append-only event journal. Neither has a mutable duplicate. The current execution loop accepts only a newly created empty Session; process-level environment resume remains later work.
 
 The repository currently retains a small set of bounded policy defaults while process bootstrap is being built:
 
@@ -22,20 +22,20 @@ The repository currently retains a small set of bounded policy defaults while pr
 
 These values are useful starting policies, not permanent constants. During the configurable agent-and-loop work, move them into validated typed configuration and pass that configuration explicitly through process composition.
 
-Pydantic AI usage enforcement is explicitly disabled for deliberation: request, tool-call, and token limits are all `None`. This also disables the SDK's implicit 50-request default. Model-request policy belongs to the harness and must not be introduced through `pydantic_ai.UsageLimits`. The harness currently enforces process-level `max_turns` and `max_actions`; it has no per-deliberation request or tool-call bound.
+Pydantic AI usage enforcement is explicitly disabled for deliberation: request, tool-call, and token limits are all `None`. This also disables the SDK's implicit 50-request default. Model-request policy belongs to the harness and must not be introduced through `pydantic_ai.UsageLimits`. The harness has no per-deliberation request or tool-call bound.
 
-`ProcessConfig` requires the game ID, session label, timezone-aware start time, Arcade operation mode, maximum turns, and maximum actions. It derives the storage ID as `<UTC timestamp>-<session label>`, using microsecond precision. `run_process` is the canonical composition root for a new Session. It resolves the real versioned game ID from Arcade before creating that Session. Missing or invalid values fail before the model request and agent-driven action; environment creation failure and a missing initial observation fail without substitutes.
+`ProcessConfig` requires the game ID, session label, timezone-aware start time, and Arcade operation mode. `max_turns` and `max_actions` are optional positive values that default to `None`. It derives the storage ID as `<UTC timestamp>-<session label>`, using microsecond precision. `run_process` is the canonical composition root for a new Session. It resolves the real versioned game ID from Arcade before creating that Session. Missing or invalid required values fail before the model request and agent-driven action; environment creation failure and a missing initial observation fail without substitutes.
 
-The current process supports only creation of a new Session. The `python -m beat_arc_agi_3 run` command requires the game, reusable session label, operation mode, and both budgets as command-line arguments; it captures the start time once in UTC. Explicit open/resume behavior remains future work.
+The current process supports only creation of a new Session. The `python -m beat_arc_agi_3 run` command requires the game, reusable session label, and operation mode; it captures the start time once in UTC. Omitted cap flags mean unlimited execution. Explicit open/resume behavior remains future work.
 
 ## Loop policy boundary
 
-The current configurable loop controls are:
+The current optional diagnostic controls are:
 
 - `max_turns`: maximum number of agent deliberations in one run.
 - `max_actions`: maximum number of real environment actions in one run.
 
-These are independent ceilings. Raising `max_actions` cannot extend a run that reaches `max_turns` first. Use both values to grant a longer experiment budget; the loop's Timeline-derived experiment evidence is always active and has no separate configuration.
+Both default to `None`, so production runs are unlimited. When supplied, they are independent ceilings: raising `max_actions` cannot extend a run that reaches `max_turns` first. They are harness-private diagnostics and never appear in `AgentDeps`, deliberation prompts, notes, or experiment context. The loop's Timeline-derived experiment evidence is always active and has no separate configuration.
 
 Additional controls should be added only when their corresponding behavior is implemented. Likely future policy fields include:
 
@@ -49,7 +49,7 @@ Additional controls should be added only when their corresponding behavior is im
 Configuration must not weaken the loop's safety invariants:
 
 - `WIN` ends the run.
-- The loop never exceeds its explicit turn or action budgets.
+- The loop never exceeds a supplied turn or action cap.
 - An action is checked against the environment's current legal actions immediately before execution.
 - The remaining queue is discarded immediately when a world-model mismatch invalidates its assumptions.
 

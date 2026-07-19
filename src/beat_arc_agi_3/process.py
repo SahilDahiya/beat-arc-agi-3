@@ -23,7 +23,7 @@ SessionLabel = Annotated[
 
 
 class ProcessConfig(BaseModel):
-    """Explicit identity, environment, and execution bounds for one run."""
+    """Identity, environment, and optional private caps for one run."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -31,8 +31,8 @@ class ProcessConfig(BaseModel):
     session_label: SessionLabel
     started_at: AwareDatetime
     operation_mode: OperationMode
-    max_turns: int = Field(ge=1)
-    max_actions: int = Field(ge=1)
+    max_turns: int | None = Field(default=None, ge=1)
+    max_actions: int | None = Field(default=None, ge=1)
 
     @property
     def session_id(self) -> str:

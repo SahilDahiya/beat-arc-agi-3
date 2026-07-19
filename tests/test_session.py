@@ -1,13 +1,16 @@
+import hashlib
 from pathlib import Path
 
 import pytest
 from pydantic_ai import ModelRequest, UserPromptPart
 
+from beat_arc_agi_3.events import WorldModelSnapshottedEvent
 from beat_arc_agi_3.session import (
     Session,
     SessionCorruptionError,
     SessionExistsError,
     SessionNotFoundError,
+    SessionSnapshotError,
 )
 
 
@@ -35,6 +38,13 @@ def test_session_create_owns_metadata_and_timeline(tmp_path: Path) -> None:
     ]
     assert session.events.entries()[0].event.game_id == "test-game"
     assert session.workspace.root == session.path
+    notes = (session.path / "notes.md").read_text(encoding="utf-8")
+    assert notes.startswith("# Notes - living scientific scratchpad\n")
+    assert "## Confirmed mechanics" in notes
+    assert "## Current level" in notes
+    assert "## Hypotheses to test" in notes
+    assert "## Confirmed facts" in notes
+    assert "## Current plan" in notes
 
 
 def test_session_reopens_the_same_validated_timeline(tmp_path: Path) -> None:
@@ -122,4 +132,122 @@ def test_session_open_requires_the_canonical_event_journal(tmp_path: Path) -> No
     session.events.path.unlink()
 
     with pytest.raises(SessionCorruptionError, match="event journal"):
+        Session.open(sessions_root=tmp_path, session_id="run-001")
+
+
+def test_session_open_requires_canonical_utf8_notes(tmp_path: Path) -> None:
+    session = Session.create(
+        sessions_root=tmp_path,
+        session_id="run-001",
+        game_id="test-game",
+        model="openai-codex:gpt-5.5",
+    )
+    (session.path / "notes.md").unlink()
+
+    with pytest.raises(SessionCorruptionError, match="notes"):
+        Session.open(sessions_root=tmp_path, session_id="run-001")
+
+
+def test_session_open_rejects_non_utf8_notes(tmp_path: Path) -> None:
+    session = Session.create(
+        sessions_root=tmp_path,
+        session_id="run-001",
+        game_id="test-game",
+        model="openai-codex:gpt-5.5",
+    )
+    (session.path / "notes.md").write_bytes(b"\xff")
+
+    with pytest.raises(SessionCorruptionError, match="notes"):
+        Session.open(sessions_root=tmp_path, session_id="run-001")
+
+
+def test_session_snapshots_an_exact_world_model_revision_once(
+    tmp_path: Path,
+) -> None:
+    session = Session.create(
+        sessions_root=tmp_path,
+        session_id="run-001",
+        game_id="test-game",
+        model="openai-codex:gpt-5.5",
+    )
+    source = b"def init_state(entry_grid):\n    return {}\n"
+    (session.path / "world_model_v5.py").write_bytes(source)
+    revision = hashlib.sha256(source).hexdigest()
+
+    snapshot = session.snapshot_world_model(
+        cleared_level=0,
+        revision=revision,
+    )
+
+    assert snapshot == session.path / "snapshots" / "cleared_level_0.py"
+    assert snapshot.read_bytes() == source
+    with pytest.raises(SessionSnapshotError, match="already exists"):
+        session.snapshot_world_model(cleared_level=0, revision=revision)
+
+
+def test_session_snapshot_rejects_a_revision_other_than_the_source(
+    tmp_path: Path,
+) -> None:
+    session = Session.create(
+        sessions_root=tmp_path,
+        session_id="run-001",
+        game_id="test-game",
+        model="openai-codex:gpt-5.5",
+    )
+    (session.path / "world_model_v5.py").write_text(
+        "def init_state(entry_grid):\n    return {}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SessionSnapshotError, match="revision"):
+        session.snapshot_world_model(cleared_level=0, revision="wrong")
+
+
+def test_session_open_validates_journaled_snapshot_artifacts(
+    tmp_path: Path,
+) -> None:
+    session = Session.create(
+        sessions_root=tmp_path,
+        session_id="run-001",
+        game_id="test-game",
+        model="openai-codex:gpt-5.5",
+    )
+    source = b"def init_state(entry_grid):\n    return {}\n"
+    (session.path / "world_model_v5.py").write_bytes(source)
+    revision = hashlib.sha256(source).hexdigest()
+    snapshot = session.snapshot_world_model(
+        cleared_level=0,
+        revision=revision,
+    )
+    session.events.append(
+        turn=1,
+        event=WorldModelSnapshottedEvent(
+            summary="Snapshotted cleared level 0 model",
+            cleared_level=0,
+            revision=revision,
+            prediction_status="exact",
+            path="snapshots/cleared_level_0.py",
+        ),
+    )
+    snapshot.unlink()
+
+    with pytest.raises(SessionCorruptionError, match="snapshot"):
+        Session.open(sessions_root=tmp_path, session_id="run-001")
+
+
+def test_session_open_rejects_an_unjournaled_snapshot(tmp_path: Path) -> None:
+    session = Session.create(
+        sessions_root=tmp_path,
+        session_id="run-001",
+        game_id="test-game",
+        model="openai-codex:gpt-5.5",
+    )
+    source = b"def init_state(entry_grid):\n    return {}\n"
+    (session.path / "world_model_v5.py").write_bytes(source)
+    session.snapshot_world_model(
+        cleared_level=0,
+        revision=hashlib.sha256(source).hexdigest(),
+    )
+
+    with pytest.raises(SessionCorruptionError, match="snapshot evidence"):
         Session.open(sessions_root=tmp_path, session_id="run-001")

@@ -1,6 +1,8 @@
 import fcntl
+import hashlib
 import os
 import shutil
+import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,6 +24,7 @@ from beat_arc_agi_3.events import (
     EventJournal,
     EventJournalError,
     SessionStartedEvent,
+    WorldModelSnapshottedEvent,
 )
 from beat_arc_agi_3.synthesis import SynthesisHarness
 from beat_arc_agi_3.timeline import (
@@ -41,6 +44,22 @@ SessionId = Annotated[
 ]
 SESSION_ID_ADAPTER = TypeAdapter(SessionId)
 
+NOTES_TEMPLATE = """# Notes - living scientific scratchpad
+
+Keep observations separate from hypotheses. Prune stale conclusions as new
+evidence arrives.
+
+## Confirmed mechanics
+
+## Current level
+
+## Hypotheses to test
+
+## Confirmed facts
+
+## Current plan
+"""
+
 
 class SessionError(RuntimeError):
     """Base error for session lifecycle and durable state."""
@@ -56,6 +75,10 @@ class SessionNotFoundError(SessionError):
 
 class SessionCorruptionError(SessionError):
     """Raised when persisted session state violates its contract."""
+
+
+class SessionSnapshotError(SessionError):
+    """Raised when an immutable level snapshot cannot be persisted."""
 
 
 class SessionMetadata(BaseModel):
@@ -84,6 +107,61 @@ class Session:
     @property
     def metadata_path(self) -> Path:
         return self.path / "session.json"
+
+    def snapshot_world_model(
+        self,
+        *,
+        cleared_level: int,
+        revision: str,
+    ) -> Path:
+        """Atomically preserve one exact model revision for a cleared level."""
+
+        if cleared_level < 0:
+            raise ValueError("cleared_level must be non-negative")
+        source_path = self.synthesis.model_path
+        try:
+            source = source_path.read_bytes()
+        except OSError as exc:
+            raise SessionSnapshotError(
+                f"world model is not readable: {source_path}"
+            ) from exc
+        actual_revision = hashlib.sha256(source).hexdigest()
+        if actual_revision != revision:
+            raise SessionSnapshotError(
+                f"world model revision {actual_revision} does not match "
+                f"expected revision {revision}"
+            )
+
+        snapshot_directory = self.path / "snapshots"
+        if not snapshot_directory.exists():
+            snapshot_directory.mkdir()
+            self._sync_directory(self.path)
+        elif not snapshot_directory.is_dir():
+            raise SessionSnapshotError(
+                f"snapshot path is not a directory: {snapshot_directory}"
+            )
+        target = snapshot_directory / f"cleared_level_{cleared_level}.py"
+        descriptor, temporary_name = tempfile.mkstemp(
+            dir=snapshot_directory,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+        )
+        temporary_path = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(source)
+                handle.flush()
+                os.fsync(handle.fileno())
+            try:
+                os.link(temporary_path, target)
+            except FileExistsError as exc:
+                raise SessionSnapshotError(
+                    f"world model snapshot already exists: {target}"
+                ) from exc
+            self._sync_directory(snapshot_directory)
+        finally:
+            temporary_path.unlink(missing_ok=True)
+        return target
 
     @classmethod
     def create(
@@ -138,6 +216,11 @@ class Session:
                 metadata_path = staging_path / "session.json"
                 with metadata_path.open("x", encoding="utf-8") as handle:
                     handle.write(f"{metadata.model_dump_json(indent=2)}\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                notes_path = staging_path / "notes.md"
+                with notes_path.open("x", encoding="utf-8") as handle:
+                    handle.write(NOTES_TEMPLATE)
                     handle.flush()
                     os.fsync(handle.fileno())
                 cls._sync_directory(staging_path)
@@ -241,7 +324,73 @@ class Session:
             raise SessionCorruptionError(
                 "session_started identity does not match session metadata"
             )
+        snapshotted_levels: set[int] = set()
+        for entry in event_entries:
+            event = entry.event
+            if not isinstance(event, WorldModelSnapshottedEvent):
+                continue
+            expected_path = (
+                f"snapshots/cleared_level_{event.cleared_level}.py"
+            )
+            if (
+                event.path != expected_path
+                or event.cleared_level in snapshotted_levels
+            ):
+                raise SessionCorruptionError(
+                    f"invalid world model snapshot event: {event.path}"
+                )
+            snapshot_path = session_path / expected_path
+            try:
+                snapshot_revision = hashlib.sha256(
+                    snapshot_path.read_bytes()
+                ).hexdigest()
+            except OSError as exc:
+                raise SessionCorruptionError(
+                    f"invalid world model snapshot: {snapshot_path}"
+                ) from exc
+            if snapshot_revision != event.revision:
+                raise SessionCorruptionError(
+                    f"world model snapshot revision mismatch: {snapshot_path}"
+                )
+            snapshotted_levels.add(event.cleared_level)
+        expected_levels = {
+            transition.before.levels_completed
+            for transition in timeline.transitions()
+            if transition.level_up
+        }
+        snapshots_path = session_path / "snapshots"
+        invalid_snapshot_path = snapshots_path.exists() and (
+            not snapshots_path.is_dir() or snapshots_path.is_symlink()
+        )
+        snapshot_entries = (
+            tuple(snapshots_path.iterdir())
+            if snapshots_path.is_dir() and not snapshots_path.is_symlink()
+            else ()
+        )
+        invalid_snapshot_entry = any(
+            not path.is_file() or path.is_symlink()
+            for path in snapshot_entries
+        )
+        actual_snapshot_names = {path.name for path in snapshot_entries}
+        expected_snapshot_names = {
+            f"cleared_level_{level}.py" for level in snapshotted_levels
+        }
+        if (
+            invalid_snapshot_path
+            or invalid_snapshot_entry
+            or snapshotted_levels != expected_levels
+            or actual_snapshot_names != expected_snapshot_names
+        ):
+            raise SessionCorruptionError(
+                "session snapshot evidence does not match level transitions"
+            )
         workspace = SessionWorkspace(session_path)
+        try:
+            workspace.read_text("notes.md")
+        except (OSError, UnicodeError) as exc:
+            raise SessionCorruptionError(
+                f"invalid session notes: {session_path / 'notes.md'}"
+            ) from exc
         return cls(
             path=session_path,
             metadata=metadata,

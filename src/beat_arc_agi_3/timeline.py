@@ -34,8 +34,9 @@ class Transition(BaseModel):
     before: GameObservation
     action: ArcAction
     after: GameObservation
-    prediction: "ModelPredictionRecord"
-    model_mispredicted: bool
+    model_revision: str = Field(min_length=1)
+    prediction: "ModelPredictionRecord | None"
+    prediction_status: Literal["exact", "mismatch", "unchecked"]
     level_up: bool
     dead: bool
     win: bool
@@ -62,18 +63,14 @@ class Transition(BaseModel):
                 "terminal flags do not match observations: "
                 f"expected {expected}, got {actual}"
             )
-        predicted_flags = {
-            "level_up": self.prediction.level_up,
-            "dead": self.prediction.dead,
-            "win": self.prediction.win,
-        }
-        expected_misprediction = (
-            self.prediction.grid != self.after.grid
-            or predicted_flags != expected
+        expected_status = self._prediction_status(
+            prediction=self.prediction,
+            after=self.after,
+            actual_flags=expected,
         )
-        if self.model_mispredicted != expected_misprediction:
+        if self.prediction_status != expected_status:
             raise ValueError(
-                "model_mispredicted does not match the recorded prediction"
+                "prediction_status does not match the recorded prediction"
             )
         return self
 
@@ -85,25 +82,49 @@ class Transition(BaseModel):
         before: GameObservation,
         action: ArcAction,
         after: GameObservation,
-        prediction: "ModelPredictionRecord",
+        model_revision: str,
+        prediction: "ModelPredictionRecord | None",
     ) -> Self:
+        actual_flags = {
+            "level_up": after.levels_completed > before.levels_completed,
+            "dead": after.state is GameState.GAME_OVER,
+            "win": after.state is GameState.WIN,
+        }
         return cls(
             index=index,
             before=before,
             action=action,
             after=after,
+            model_revision=model_revision,
             prediction=prediction,
-            model_mispredicted=(
-                prediction.grid != after.grid
-                or prediction.level_up
-                != (after.levels_completed > before.levels_completed)
-                or prediction.dead != (after.state is GameState.GAME_OVER)
-                or prediction.win != (after.state is GameState.WIN)
+            prediction_status=cls._prediction_status(
+                prediction=prediction,
+                after=after,
+                actual_flags=actual_flags,
             ),
-            level_up=after.levels_completed > before.levels_completed,
-            dead=after.state is GameState.GAME_OVER,
-            win=after.state is GameState.WIN,
+            **actual_flags,
         )
+
+    @staticmethod
+    def _prediction_status(
+        *,
+        prediction: "ModelPredictionRecord | None",
+        after: GameObservation,
+        actual_flags: dict[str, bool],
+    ) -> Literal["exact", "mismatch", "unchecked"]:
+        if prediction is None:
+            return "unchecked"
+        predicted_flags = {
+            "level_up": prediction.level_up,
+            "dead": prediction.dead,
+            "win": prediction.win,
+        }
+        terminal = any(actual_flags.values())
+        if predicted_flags != actual_flags:
+            return "mismatch"
+        if not terminal and prediction.grid != after.grid:
+            return "mismatch"
+        return "exact"
 
 
 class InitialObservationRecord(BaseModel):
@@ -120,7 +141,6 @@ class ModelPredictionRecord(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    revision: str = Field(min_length=1)
     grid: Grid
     level_up: bool
     dead: bool
@@ -136,7 +156,8 @@ class ActionResultRecord(BaseModel):
     index: int = Field(ge=0)
     action: ArcAction
     after: GameObservation
-    prediction: ModelPredictionRecord
+    model_revision: str = Field(min_length=1)
+    prediction: ModelPredictionRecord | None = None
 
 
 TimelineRecord = InitialObservationRecord | ActionResultRecord
@@ -190,7 +211,8 @@ class JsonlTimeline:
         *,
         action: ArcAction,
         after: GameObservation,
-        prediction: ModelPredictionRecord,
+        model_revision: str,
+        prediction: ModelPredictionRecord | None,
     ) -> Transition:
         if self._initial is None:
             raise TimelineChainError(
@@ -211,6 +233,7 @@ class JsonlTimeline:
             before=before,
             action=action,
             after=after,
+            model_revision=model_revision,
             prediction=prediction,
         )
         self._append_record(
@@ -218,6 +241,7 @@ class JsonlTimeline:
                 index=transition.index,
                 action=transition.action,
                 after=transition.after,
+                model_revision=transition.model_revision,
                 prediction=transition.prediction,
             )
         )
@@ -303,6 +327,7 @@ class JsonlTimeline:
                         before=before,
                         action=record.action,
                         after=record.after,
+                        model_revision=record.model_revision,
                         prediction=record.prediction,
                     )
                 )

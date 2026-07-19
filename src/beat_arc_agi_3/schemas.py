@@ -99,6 +99,13 @@ class CommitActions(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    kind: Literal["plan", "probe"]
     actions: tuple[ArcAction, ...] = Field(min_length=1)
     reason: str = Field(min_length=1)
     suggestion: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_commit_kind(self) -> Self:
+        if self.kind == "probe" and len(self.actions) != 1:
+            raise ValueError("probe commits require exactly one action")
+        return self

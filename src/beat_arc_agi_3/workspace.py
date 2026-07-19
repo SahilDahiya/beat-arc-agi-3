@@ -21,6 +21,8 @@ class WorkspaceWriteDeniedError(RuntimeError):
 class WorkspaceTools(Protocol):
     def has_file(self, path: str) -> bool: ...
 
+    def read_text(self, path: str) -> str: ...
+
     def read_file(self, query: "ReadFileQuery") -> str: ...
 
     def write_file(self, query: "WriteFileQuery") -> str: ...
@@ -65,12 +67,22 @@ class SessionWorkspace:
 
     def resolve_writable(self, requested_path: str) -> ResolvedWorkspacePath:
         resolved = self.resolve(requested_path)
-        if resolved.label in self._RESERVED_FILES:
+        if resolved.label in self._RESERVED_FILES or (
+            resolved.label == "snapshots"
+            or resolved.label.startswith("snapshots/")
+        ):
             raise WorkspaceWriteDeniedError(resolved.label)
         return resolved
 
     def has_file(self, path: str) -> bool:
         return self.resolve(path).path.is_file()
+
+    def read_text(self, path: str) -> str:
+        resolved = self.resolve(path)
+        try:
+            return resolved.path.read_text(encoding="utf-8")
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(resolved.label) from exc
 
     def atomic_write_text(self, path: Path, content: str) -> None:
         descriptor, temporary_name = tempfile.mkstemp(

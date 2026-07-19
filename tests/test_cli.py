@@ -46,10 +46,6 @@ def test_run_command_builds_and_executes_process_config(
             "ls20-experiment-001",
             "--mode",
             "online",
-            "--max-turns",
-            "10",
-            "--max-actions",
-            "30",
         ]
     )
 
@@ -63,8 +59,8 @@ def test_run_command_builds_and_executes_process_config(
         config.session_id,
     )
     assert config.operation_mode is OperationMode.ONLINE
-    assert config.max_turns == 10
-    assert config.max_actions == 30
+    assert config.max_turns is None
+    assert config.max_actions is None
     assert capsys.readouterr().out == (
         f"session={config.session_id} stop=max_actions turns=1 actions=1 "
         "state=NOT_FINISHED levels=0/7\n"
