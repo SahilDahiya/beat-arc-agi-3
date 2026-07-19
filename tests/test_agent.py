@@ -10,6 +10,8 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from beat_arc_agi_3.agent import build_agent, build_openai_model
 from beat_arc_agi_3.config import Settings
 from beat_arc_agi_3.dependencies import AgentDeps, HistoryQuery
+from beat_arc_agi_3.events import ArcEvent
+from beat_arc_agi_3.oauth_store import OpenAICodexCredentials
 from beat_arc_agi_3.runner import deliberate, render_observation
 from beat_arc_agi_3.schemas import CommitActions, GameObservation
 from beat_arc_agi_3.synthesis import (
@@ -66,6 +68,9 @@ class RecordingSynthesis:
     green: bool = True
     backtest_calls: list[int] = field(default_factory=list)
     preflight_calls: list[tuple[str, ...]] = field(default_factory=list)
+
+    def model_revision(self) -> str:
+        return "test-revision"
 
     def run_backtest(self, *, max_details: int = 1) -> BacktestReport:
         self.backtest_calls.append(max_details)
@@ -127,6 +132,15 @@ class MemoryConversation:
         self.recorded.extend(messages)
 
 
+@dataclass
+class RecordingEvents:
+    recorded: list[tuple[int, ArcEvent]] = field(default_factory=list)
+
+    def append(self, *, turn: int, event: ArcEvent) -> object:
+        self.recorded.append((turn, event))
+        return event
+
+
 def observation(*available_actions: int) -> GameObservation:
     return GameObservation.from_frame(
         FrameData(
@@ -150,18 +164,37 @@ def commit_args(action: str = "ACTION1") -> dict[str, object]:
     }
 
 
-def test_configured_model_uses_gpt_5_5_with_the_validated_api_key() -> None:
+def test_configured_model_uses_gpt_5_5_with_oauth_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "beat_arc_agi_3.agent.resolve_openai_codex_credentials",
+        lambda: OpenAICodexCredentials(
+            access="oauth-access",
+            refresh="oauth-refresh",
+            expires=1_760_000_000_000,
+            account_id="acct-123",
+        ),
+    )
     settings = Settings(
         _env_file=None,
         arc_api_key=SecretStr("arc-test"),
-        openai_api_key=SecretStr("openai-test"),
-        pydantic_ai_model="openai:gpt-5.5",
+        pydantic_ai_model="openai-codex:gpt-5.5",
         sessions_root="./sessions",
     )
 
-    agent = build_agent(build_openai_model(settings))
+    model = build_openai_model(settings)
+    agent = build_agent(model)
 
     assert agent.model.model_name == "gpt-5.5"
+    assert str(model._provider.base_url) == "https://chatgpt.com/backend-api/codex/"
+    assert model._provider.client.default_headers["chatgpt-account-id"] == (
+        "acct-123"
+    )
+    assert model._provider.client.default_headers["originator"] == (
+        "beat-arc-agi-3"
+    )
+    assert model.settings == {"openai_store": False}
 
 
 def test_agent_fails_hard_when_model_is_missing() -> None:
@@ -171,6 +204,7 @@ def test_agent_fails_hard_when_model_is_missing() -> None:
 
 def test_agent_reads_history_then_returns_typed_commit() -> None:
     history = RecordingHistory()
+    events = RecordingEvents()
 
     def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         assert [tool.name for tool in info.function_tools] == [
@@ -212,6 +246,8 @@ def test_agent_reads_history_then_returns_typed_commit() -> None:
         history=history,
         workspace=RecordingWorkspace(),
         synthesis=RecordingSynthesis(),
+        events=events,
+        turn=1,
     )
     conversation = MemoryConversation()
     result = asyncio.run(
@@ -223,6 +259,51 @@ def test_agent_reads_history_then_returns_typed_commit() -> None:
     assert history.calls == [HistoryQuery(detail="brief", limit=3)]
     assert deps.synthesis.preflight_calls == [("ACTION1",)]
     assert len(conversation.messages()) == 5
+    assert [event.type for _, event in events.recorded] == [
+        "deliberation_started",
+        "tool_started",
+        "tool_completed",
+        "commit_accepted",
+    ]
+    assert all(turn == 1 for turn, _ in events.recorded)
+
+
+def test_deliberation_has_no_pydantic_ai_request_or_tool_call_limit() -> None:
+    model_calls = 0
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        nonlocal model_calls
+        model_calls += 1
+        if model_calls <= 51:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "read_history",
+                        {"detail": "brief", "limit": 1},
+                    )
+                ]
+            )
+        return ModelResponse(parts=[ToolCallPart("commit_actions", commit_args())])
+
+    deps = AgentDeps(
+        observation=observation(1),
+        history=RecordingHistory(),
+        workspace=RecordingWorkspace(),
+        synthesis=RecordingSynthesis(),
+        events=RecordingEvents(),
+        turn=1,
+    )
+
+    result = asyncio.run(
+        deliberate(
+            build_agent(FunctionModel(model)),
+            deps,
+            MemoryConversation(),
+        )
+    )
+
+    assert model_calls == 52
+    assert result.actions[0].action == "ACTION1"
 
 
 def test_successful_commit_skips_sibling_history_tool() -> None:
@@ -241,6 +322,8 @@ def test_successful_commit_skips_sibling_history_tool() -> None:
         history=history,
         workspace=RecordingWorkspace(),
         synthesis=RecordingSynthesis(),
+        events=RecordingEvents(),
+        turn=1,
     )
     result = asyncio.run(
         deliberate(
@@ -268,6 +351,8 @@ def test_agent_retries_a_commit_with_an_unavailable_action() -> None:
         history=RecordingHistory(),
         workspace=RecordingWorkspace(),
         synthesis=RecordingSynthesis(),
+        events=RecordingEvents(),
+        turn=1,
     )
     result = asyncio.run(
         deliberate(
@@ -314,6 +399,8 @@ def test_agent_must_create_and_backtest_world_model_before_committing() -> None:
         history=RecordingHistory(),
         workspace=workspace,
         synthesis=synthesis,
+        events=RecordingEvents(),
+        turn=1,
     )
     result = asyncio.run(
         deliberate(
@@ -345,6 +432,8 @@ def test_deliberation_reuses_session_message_history() -> None:
         history=RecordingHistory(),
         workspace=RecordingWorkspace(),
         synthesis=RecordingSynthesis(),
+        events=RecordingEvents(),
+        turn=1,
     )
     conversation = MemoryConversation()
 
@@ -375,6 +464,8 @@ def test_agent_reads_a_workspace_file_then_commits() -> None:
         history=RecordingHistory(),
         workspace=workspace,
         synthesis=RecordingSynthesis(),
+        events=RecordingEvents(),
+        turn=1,
     )
     result = asyncio.run(
         deliberate(build_agent(FunctionModel(model)), deps, MemoryConversation())
@@ -423,6 +514,8 @@ def test_agent_writes_then_edits_workspace_files_before_commit() -> None:
         history=RecordingHistory(),
         workspace=workspace,
         synthesis=RecordingSynthesis(),
+        events=RecordingEvents(),
+        turn=1,
     )
     result = asyncio.run(
         deliberate(build_agent(FunctionModel(model)), deps, MemoryConversation())

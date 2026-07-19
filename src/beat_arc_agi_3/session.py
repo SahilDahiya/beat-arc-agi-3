@@ -18,6 +18,11 @@ from pydantic import (
 )
 
 from beat_arc_agi_3.conversation import ConversationError, JsonlConversation
+from beat_arc_agi_3.events import (
+    EventJournal,
+    EventJournalError,
+    SessionStartedEvent,
+)
 from beat_arc_agi_3.synthesis import SynthesisHarness
 from beat_arc_agi_3.timeline import (
     JsonlTimeline,
@@ -72,6 +77,7 @@ class Session:
     metadata: SessionMetadata
     timeline: JsonlTimeline
     conversation: JsonlConversation
+    events: EventJournal
     workspace: SessionWorkspace
     synthesis: SynthesisHarness
 
@@ -114,6 +120,21 @@ class Session:
                     game_id=metadata.game_id,
                 )
                 JsonlConversation.create(staging_path / "messages.jsonl")
+                events = EventJournal.create(
+                    staging_path / "events.jsonl",
+                    session_id=metadata.session_id,
+                )
+                events.append(
+                    turn=0,
+                    event=SessionStartedEvent(
+                        summary=(
+                            f"Started {metadata.game_id} session with "
+                            f"{metadata.model}"
+                        ),
+                        game_id=metadata.game_id,
+                        model=metadata.model,
+                    ),
+                )
                 metadata_path = staging_path / "session.json"
                 with metadata_path.open("x", encoding="utf-8") as handle:
                     handle.write(f"{metadata.model_dump_json(indent=2)}\n")
@@ -135,12 +156,17 @@ class Session:
             game_id=metadata.game_id,
         )
         conversation = JsonlConversation(session_path / "messages.jsonl")
+        events = EventJournal(
+            session_path / "events.jsonl",
+            session_id=metadata.session_id,
+        )
         workspace = SessionWorkspace(session_path)
         return cls(
             path=session_path,
             metadata=metadata,
             timeline=timeline,
             conversation=conversation,
+            events=events,
             workspace=workspace,
             synthesis=SynthesisHarness(
                 model_path=session_path / "world_model_v5.py",
@@ -193,12 +219,35 @@ class Session:
                 "invalid session conversation: "
                 f"{session_path / 'messages.jsonl'}"
             ) from exc
+        try:
+            events = EventJournal(
+                session_path / "events.jsonl",
+                session_id=metadata.session_id,
+            )
+        except EventJournalError as exc:
+            raise SessionCorruptionError(
+                "invalid session event journal: "
+                f"{session_path / 'events.jsonl'}"
+            ) from exc
+        event_entries = events.entries()
+        if not event_entries or not isinstance(
+            event_entries[0].event, SessionStartedEvent
+        ):
+            raise SessionCorruptionError(
+                "event journal must start with session_started"
+            )
+        started = event_entries[0].event
+        if started.game_id != metadata.game_id or started.model != metadata.model:
+            raise SessionCorruptionError(
+                "session_started identity does not match session metadata"
+            )
         workspace = SessionWorkspace(session_path)
         return cls(
             path=session_path,
             metadata=metadata,
             timeline=timeline,
             conversation=conversation,
+            events=events,
             workspace=workspace,
             synthesis=SynthesisHarness(
                 model_path=session_path / "world_model_v5.py",

@@ -17,9 +17,19 @@ class Settings(BaseSettings):
     )
 
     arc_api_key: SecretStr
-    openai_api_key: SecretStr
     pydantic_ai_model: str
     sessions_root: Path
+
+    @field_validator("pydantic_ai_model")
+    @classmethod
+    def validate_oauth_model(cls, model: str) -> str:
+        provider, separator, model_name = model.partition(":")
+        if provider != "openai-codex" or not separator or not model_name:
+            raise ValueError(
+                "pydantic_ai_model must use the "
+                "openai-codex:<model-name> format"
+            )
+        return model
 
     @field_validator("sessions_root")
     @classmethod

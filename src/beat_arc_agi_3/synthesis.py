@@ -121,6 +121,11 @@ class SynthesisHarness:
     def runtime(self) -> WorldModelRuntime:
         return WorldModelRuntime(self.model_path)
 
+    def model_revision(self) -> str:
+        """Return the exact revision of the installed generated program."""
+
+        return self.runtime.revision
+
     def run_backtest(self, *, max_details: int = 1) -> BacktestReport:
         if max_details < 0 or max_details > 100:
             raise ValueError("max_details must be between 0 and 100")

@@ -41,7 +41,7 @@ class SessionWorkspace:
     root: Path
 
     _RESERVED_FILES = frozenset(
-        {"session.json", "timeline.jsonl", "messages.jsonl"}
+        {"session.json", "timeline.jsonl", "messages.jsonl", "events.jsonl"}
     )
 
     def __post_init__(self) -> None:

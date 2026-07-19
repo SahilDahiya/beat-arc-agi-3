@@ -125,7 +125,7 @@ def test_write_file_rejects_a_symlink_escape(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "path",
-    ["session.json", "timeline.jsonl", "messages.jsonl"],
+    ["session.json", "timeline.jsonl", "messages.jsonl", "events.jsonl"],
 )
 def test_write_file_cannot_replace_harness_owned_session_state(
     tmp_path: Path,

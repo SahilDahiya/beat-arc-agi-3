@@ -13,7 +13,7 @@ from beat_arc_agi_3.session import Session
 
 @pytest.mark.paid_integration
 def test_real_model_executes_one_action_in_real_arcade() -> None:
-    """Required smoke test: one paid model turn and one real ARC action."""
+    """Required smoke test: one subscription model turn and one real ARC action."""
 
     settings = Settings()
     config = ProcessConfig(

@@ -1,10 +1,12 @@
 import re
+from types import SimpleNamespace
 
 from arc_agi import OperationMode
 from arcengine import GameState
 
 from beat_arc_agi_3 import __main__ as cli
 from beat_arc_agi_3.loop import LoopResult
+from beat_arc_agi_3.oauth_store import OpenAICodexCredentials
 from beat_arc_agi_3.schemas import GameObservation
 
 
@@ -67,3 +69,71 @@ def test_run_command_builds_and_executes_process_config(
         f"session={config.session_id} stop=max_actions turns=1 actions=1 "
         "state=NOT_FINISHED levels=0/7\n"
     )
+
+
+def test_auth_login_waits_for_callback_and_saves_credentials(
+    monkeypatch,
+    capsys,
+) -> None:
+    flow = object()
+    credentials = OpenAICodexCredentials(
+        access="oauth-access",
+        refresh="oauth-refresh",
+        expires=1_760_000_000_000,
+        account_id="acct-123",
+    )
+    saved: list[OpenAICodexCredentials] = []
+
+    monkeypatch.setattr(
+        cli,
+        "start_openai_codex_login",
+        lambda: (
+            flow,
+            SimpleNamespace(auth_url="https://auth.example.test/login"),
+        ),
+    )
+
+    async def wait_for_callback(received_flow):
+        assert received_flow is flow
+        return credentials
+
+    monkeypatch.setattr(cli, "wait_for_openai_codex_callback", wait_for_callback)
+    monkeypatch.setattr(cli, "set_openai_codex_credentials", saved.append)
+
+    assert cli.main(["auth", "login"]) == 0
+    assert saved == [credentials]
+    assert capsys.readouterr().out == (
+        "Open this URL in your browser:\n"
+        "https://auth.example.test/login\n"
+        "Waiting for the OAuth callback on http://localhost:1455...\n"
+        "OAuth login saved for ChatGPT account acct-123.\n"
+    )
+
+
+def test_auth_status_and_logout_do_not_expose_tokens(monkeypatch, capsys) -> None:
+    credentials = OpenAICodexCredentials(
+        access="oauth-access",
+        refresh="oauth-refresh",
+        expires=1_760_000_000_000,
+        account_id="acct-123",
+    )
+    monkeypatch.setattr(
+        cli,
+        "get_openai_codex_credentials",
+        lambda: credentials,
+    )
+    cleared = False
+
+    def clear() -> None:
+        nonlocal cleared
+        cleared = True
+
+    monkeypatch.setattr(cli, "clear_openai_codex_credentials", clear)
+
+    assert cli.main(["auth", "status"]) == 0
+    assert capsys.readouterr().out == (
+        "openai-codex: logged in as acct-123; expires=1760000000000\n"
+    )
+    assert cli.main(["auth", "logout"]) == 0
+    assert cleared is True
+    assert capsys.readouterr().out == "openai-codex: logged out\n"

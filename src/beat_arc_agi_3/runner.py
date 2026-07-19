@@ -3,10 +3,17 @@ from typing import Protocol, Sequence
 from pydantic_ai import Agent, ModelMessage, UsageLimits
 
 from beat_arc_agi_3.dependencies import AgentDeps
+from beat_arc_agi_3.events import CommitAcceptedEvent, DeliberationStartedEvent
 from beat_arc_agi_3.schemas import CommitActions, GameObservation
 
 
-DELIBERATION_LIMITS = UsageLimits(request_limit=8, tool_calls_limit=8)
+NO_SDK_USAGE_LIMITS = UsageLimits(
+    request_limit=None,
+    tool_calls_limit=None,
+    input_tokens_limit=None,
+    output_tokens_limit=None,
+    total_tokens_limit=None,
+)
 
 
 class Conversation(Protocol):
@@ -51,11 +58,17 @@ async def deliberate(
     if turn_context:
         prompt_parts.append(turn_context)
     prompt_parts.append(render_observation(observation))
+    deps.events.append(
+        turn=deps.turn,
+        event=DeliberationStartedEvent(
+            summary=f"Deliberating over turn {deps.turn} observation"
+        ),
+    )
     result = await agent.run(
         "\n".join(prompt_parts),
         deps=deps,
         message_history=conversation.messages(),
-        usage_limits=DELIBERATION_LIMITS,
+        usage_limits=NO_SDK_USAGE_LIMITS,
     )
     conversation.append(
         result.new_messages(
@@ -64,5 +77,15 @@ async def deliberate(
                 f"{result.output.suggestion}"
             )
         )
+    )
+    action_names = ", ".join(action.action for action in result.output.actions)
+    deps.events.append(
+        turn=deps.turn,
+        event=CommitAcceptedEvent(
+            summary=f"Accepted {len(result.output.actions)} action(s): {action_names}",
+            actions=result.output.actions,
+            reason=result.output.reason,
+            suggestion=result.output.suggestion,
+        ),
     )
     return result.output

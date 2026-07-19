@@ -1,15 +1,29 @@
 import asyncio
-from typing import Literal
+import inspect
+from collections.abc import Awaitable, Callable
+from time import perf_counter
+from typing import Literal, TypeVar
 
+from openai import AsyncOpenAI
 from pydantic_ai import Agent, ModelRetry, RunContext, ToolOutput
 from pydantic_ai.models import Model
-from pydantic_ai.models.openai import OpenAIResponsesModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from beat_arc_agi_3.config import Settings
 from beat_arc_agi_3.dependencies import AgentDeps, HistoryDetail, HistoryQuery
+from beat_arc_agi_3.events import (
+    BacktestCompletedEvent,
+    ToolCompletedEvent,
+    ToolFailedEvent,
+    ToolStartedEvent,
+    WorldModelInstalledEvent,
+)
+from beat_arc_agi_3.oauth_openai_codex import (
+    resolve_openai_codex_credentials,
+)
+from beat_arc_agi_3.openai_codex_model import OpenAICodexResponsesModel
 from beat_arc_agi_3.schemas import CommitActions
-from beat_arc_agi_3.synthesis import BacktestRequiredError
+from beat_arc_agi_3.synthesis import BacktestReport, BacktestRequiredError
 from beat_arc_agi_3.tools.edit_file import EditFileError, EditFileQuery
 from beat_arc_agi_3.tools.read_file import ReadFileError, ReadFileQuery
 from beat_arc_agi_3.tools.run_backtest import (
@@ -27,7 +41,66 @@ from beat_arc_agi_3.tools.run_python import (
     execute_run_python,
 )
 from beat_arc_agi_3.tools.write_file import WriteFileError, WriteFileQuery
-from beat_arc_agi_3.world_model import WorldModelError
+from beat_arc_agi_3.world_model import WORLD_MODEL_FILENAME, WorldModelError
+
+
+ToolResult = TypeVar("ToolResult")
+
+
+async def _run_recorded_tool(
+    ctx: RunContext[AgentDeps],
+    *,
+    tool_name: str,
+    started_summary: str,
+    completed_summary: str,
+    operation: Callable[[], ToolResult | Awaitable[ToolResult]],
+    on_success: Callable[[ToolResult], None] | None = None,
+) -> ToolResult:
+    """Execute one model tool between durable start and terminal events."""
+
+    tool_call_id = ctx.tool_call_id
+    if tool_call_id is None:
+        raise RuntimeError(f"{tool_name} requires a Pydantic AI tool_call_id")
+    ctx.deps.events.append(
+        turn=ctx.deps.turn,
+        event=ToolStartedEvent(
+            summary=started_summary,
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+        ),
+    )
+    started_at = perf_counter()
+    try:
+        pending = operation()
+        result = await pending if inspect.isawaitable(pending) else pending
+        if on_success is not None:
+            on_success(result)
+    except BaseException as exc:
+        duration_ms = max(0, int((perf_counter() - started_at) * 1000))
+        message = str(exc).strip() or type(exc).__name__
+        ctx.deps.events.append(
+            turn=ctx.deps.turn,
+            event=ToolFailedEvent(
+                summary=f"{tool_name} failed",
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                duration_ms=duration_ms,
+                error_type=type(exc).__name__,
+                message=message[:2000],
+            ),
+        )
+        raise
+    duration_ms = max(0, int((perf_counter() - started_at) * 1000))
+    ctx.deps.events.append(
+        turn=ctx.deps.turn,
+        event=ToolCompletedEvent(
+            summary=completed_summary,
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            duration_ms=duration_ms,
+        ),
+    )
+    return result
 
 
 INSTRUCTIONS = """
@@ -44,13 +117,21 @@ must be JSON-serializable. predicted_grid must be a rectangular nested list of
 integer color values from 0 through 15 with the observation's shape; never
 return hexadecimal strings. After every model revision, call run_backtest and
 repair the earliest mismatch until the current revision is green.
+Treat a green backtest as finite historical consistency, never proof that the
+mechanism, representation, or goal is correct. Prefer general object and latent
+state rules. Do not overfit with transition-index or action-occurrence special
+cases unless the recorded evidence demonstrates that hidden state. Keep
+observations separate from hypotheses, actively falsify unsupported goal and
+affordance assumptions, and use the harness experiment evidence in each turn.
 Use run_bfs only on that green revision when model-space search is useful; its
 returned plan is valid only for the revision named in the result.
 When ready, call commit_actions with a non-empty ordered queue, the reason for
 the queue, and a suggestion for the next deliberation turn. Only commit actions
 listed as legal in the current observation. ACTION6 is a click and requires x/y
 coordinates; parameterless actions reject coordinates. A commit ends this turn,
-so do not request more tools alongside it.
+so do not request more tools alongside it. If no evidence-backed goal-reaching
+plan exists, prefer the smallest experiment that distinguishes competing
+hypotheses; state its expected observation and falsifier in reason.
 """.strip()
 
 
@@ -80,7 +161,13 @@ def build_agent(
         """Read recent real transitions at the requested level of detail."""
 
         query = HistoryQuery(detail=detail, limit=limit)
-        return await ctx.deps.history.read(query)
+        return await _run_recorded_tool(
+            ctx,
+            tool_name="read_history",
+            started_summary=f"Reading {detail} history, limit {limit}",
+            completed_summary=f"Read {detail} history",
+            operation=lambda: ctx.deps.history.read(query),
+        )
 
     @agent.tool
     async def read_file(
@@ -98,8 +185,14 @@ def build_agent(
         """
 
         try:
-            return ctx.deps.workspace.read_file(
-                ReadFileQuery(path=path, offset=offset, limit=limit)
+            return await _run_recorded_tool(
+                ctx,
+                tool_name="read_file",
+                started_summary=f"Reading {path}",
+                completed_summary=f"Read {path}",
+                operation=lambda: ctx.deps.workspace.read_file(
+                    ReadFileQuery(path=path, offset=offset, limit=limit)
+                ),
             )
         except ReadFileError as exc:
             raise ModelRetry(str(exc)) from exc
@@ -117,9 +210,31 @@ def build_agent(
             content: Complete replacement text for the file.
         """
 
+        def record_world_model_install(_result: str) -> None:
+            if path != WORLD_MODEL_FILENAME:
+                return
+            revision = ctx.deps.synthesis.model_revision()
+            ctx.deps.events.append(
+                turn=ctx.deps.turn,
+                event=WorldModelInstalledEvent(
+                    summary=(
+                        f"Installed world_model_v5.py revision "
+                        f"{revision[:12]}"
+                    ),
+                    revision=revision,
+                ),
+            )
+
         try:
-            return ctx.deps.workspace.write_file(
-                WriteFileQuery(path=path, content=content)
+            return await _run_recorded_tool(
+                ctx,
+                tool_name="write_file",
+                started_summary=f"Writing {path}",
+                completed_summary=f"Wrote {path}",
+                operation=lambda: ctx.deps.workspace.write_file(
+                    WriteFileQuery(path=path, content=content)
+                ),
+                on_success=record_world_model_install,
             )
         except WriteFileError as exc:
             raise ModelRetry(str(exc)) from exc
@@ -141,14 +256,36 @@ def build_agent(
             replace_all: Replace every match instead of requiring uniqueness.
         """
 
+        def record_world_model_install(_result: str) -> None:
+            if path != WORLD_MODEL_FILENAME:
+                return
+            revision = ctx.deps.synthesis.model_revision()
+            ctx.deps.events.append(
+                turn=ctx.deps.turn,
+                event=WorldModelInstalledEvent(
+                    summary=(
+                        f"Installed world_model_v5.py revision "
+                        f"{revision[:12]}"
+                    ),
+                    revision=revision,
+                ),
+            )
+
         try:
-            return ctx.deps.workspace.edit_file(
-                EditFileQuery(
-                    path=path,
-                    old_string=old_string,
-                    new_string=new_string,
-                    replace_all=replace_all,
-                )
+            return await _run_recorded_tool(
+                ctx,
+                tool_name="edit_file",
+                started_summary=f"Editing {path}",
+                completed_summary=f"Edited {path}",
+                operation=lambda: ctx.deps.workspace.edit_file(
+                    EditFileQuery(
+                        path=path,
+                        old_string=old_string,
+                        new_string=new_string,
+                        replace_all=replace_all,
+                    )
+                ),
+                on_success=record_world_model_install,
             )
         except EditFileError as exc:
             raise ModelRetry(str(exc)) from exc
@@ -166,10 +303,35 @@ def build_agent(
         """
 
         query = RunBacktestQuery(max_details=max_details)
+
+        def record_backtest(report: BacktestReport) -> None:
+            ctx.deps.events.append(
+                turn=ctx.deps.turn,
+                event=BacktestCompletedEvent(
+                    summary=(
+                        f"Backtest {report.status} for revision "
+                        f"{report.revision[:12]}: "
+                        f"{report.exact_transitions}/"
+                        f"{report.timeline_transitions} exact"
+                    ),
+                    revision=report.revision,
+                    status=report.status,
+                    timeline_transitions=report.timeline_transitions,
+                    exact_transitions=report.exact_transitions,
+                ),
+            )
+
         try:
-            report = await asyncio.to_thread(
-                ctx.deps.synthesis.run_backtest,
-                max_details=query.max_details,
+            report = await _run_recorded_tool(
+                ctx,
+                tool_name="run_backtest",
+                started_summary="Backtesting world_model_v5.py",
+                completed_summary="Backtest completed",
+                operation=lambda: asyncio.to_thread(
+                    ctx.deps.synthesis.run_backtest,
+                    max_details=query.max_details,
+                ),
+                on_success=record_backtest,
             )
         except (BacktestRequiredError, WorldModelError, ValueError) as exc:
             raise ModelRetry(str(exc)) from exc
@@ -193,10 +355,18 @@ def build_agent(
             timeout_seconds=timeout_seconds,
         )
         try:
-            return await asyncio.to_thread(
-                execute_run_python,
-                ctx.deps.workspace,
-                query,
+            return await _run_recorded_tool(
+                ctx,
+                tool_name="run_python",
+                started_summary=(
+                    f"Running sandboxed Python with {timeout_seconds}s timeout"
+                ),
+                completed_summary="Sandboxed Python completed",
+                operation=lambda: asyncio.to_thread(
+                    execute_run_python,
+                    ctx.deps.workspace,
+                    query,
+                ),
             )
         except RunPythonError as exc:
             raise ModelRetry(str(exc)) from exc
@@ -228,10 +398,19 @@ def build_agent(
             timeout_seconds=timeout_seconds,
         )
         try:
-            return await asyncio.to_thread(
-                execute_run_bfs,
-                ctx.deps.synthesis,
-                query,
+            return await _run_recorded_tool(
+                ctx,
+                tool_name="run_bfs",
+                started_summary=(
+                    f"Searching model for {target}, depth {max_depth}, "
+                    f"budget {node_budget}"
+                ),
+                completed_summary=f"Model search for {target} completed",
+                operation=lambda: asyncio.to_thread(
+                    execute_run_bfs,
+                    ctx.deps.synthesis,
+                    query,
+                ),
             )
         except (BacktestRequiredError, WorldModelError, ValueError) as exc:
             raise ModelRetry(str(exc)) from exc
@@ -264,17 +443,28 @@ def build_agent(
     return agent
 
 
-def build_openai_model(settings: Settings) -> OpenAIResponsesModel:
-    """Construct the configured OpenAI model from explicit validated settings."""
+def build_openai_model(settings: Settings) -> OpenAICodexResponsesModel:
+    """Construct the configured subscription-backed OpenAI model."""
 
     provider_name, separator, model_name = settings.pydantic_ai_model.partition(":")
-    if provider_name != "openai" or not separator or not model_name:
+    if provider_name != "openai-codex" or not separator or not model_name:
         raise ValueError(
-            "pydantic_ai_model must use the openai:<model-name> format"
+            "pydantic_ai_model must use the "
+            "openai-codex:<model-name> format"
         )
-    return OpenAIResponsesModel(
+    credentials = resolve_openai_codex_credentials()
+    return OpenAICodexResponsesModel(
         model_name,
         provider=OpenAIProvider(
-            api_key=settings.openai_api_key.get_secret_value()
+            openai_client=AsyncOpenAI(
+                base_url="https://chatgpt.com/backend-api/codex",
+                api_key=credentials.access,
+                default_headers={
+                    "chatgpt-account-id": credentials.account_id,
+                    "originator": "beat-arc-agi-3",
+                    "OpenAI-Beta": "responses=experimental",
+                },
+            )
         ),
+        settings={"openai_store": False},
     )
