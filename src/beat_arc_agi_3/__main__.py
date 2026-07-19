@@ -6,6 +6,13 @@ from datetime import UTC, datetime
 from arc_agi import OperationMode
 
 from beat_arc_agi_3.config import Settings
+from beat_arc_agi_3.evals.ls20_evidence import (
+    run_ls20_session_evidence_regression,
+)
+from beat_arc_agi_3.evals.session_stage import (
+    report_passed,
+    run_session_stage_eval,
+)
 from beat_arc_agi_3.oauth_openai_codex import (
     start_openai_codex_login,
     wait_for_openai_codex_callback,
@@ -32,6 +39,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument("--max-turns", type=int)
     run_parser.add_argument("--max-actions", type=int)
+
+    eval_parser = subparsers.add_parser(
+        "eval",
+        help="evaluate persisted ARC Session evidence",
+    )
+    eval_subparsers = eval_parser.add_subparsers(
+        dest="eval_command",
+        required=True,
+    )
+    eval_subparsers.add_parser(
+        "ls20-session-evidence",
+        help="run the historical LS20 evidence regression",
+    )
+    session_eval_parser = eval_subparsers.add_parser(
+        "session",
+        help="score one persisted Session against a level target",
+    )
+    session_eval_parser.add_argument("--session", required=True)
+    session_eval_parser.add_argument(
+        "--target-level",
+        required=True,
+        type=int,
+    )
 
     auth_parser = subparsers.add_parser(
         "auth",
@@ -80,6 +110,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("openai-codex: logged out")
             return 0
         raise RuntimeError(f"unsupported auth command: {args.auth_command}")
+
+    if args.command == "eval":
+        settings = Settings()
+        if args.eval_command == "ls20-session-evidence":
+            report = asyncio.run(
+                run_ls20_session_evidence_regression(settings.sessions_root)
+            )
+        elif args.eval_command == "session":
+            report = asyncio.run(
+                run_session_stage_eval(
+                    sessions_root=settings.sessions_root,
+                    session_id=args.session,
+                    target_levels_completed=args.target_level,
+                )
+            )
+        else:
+            raise RuntimeError(f"unsupported eval: {args.eval_command}")
+        report.print(width=160, include_reasons=True)
+        return 0 if report_passed(report) else 1
 
     if args.command != "run":
         raise RuntimeError(f"unsupported command: {args.command}")

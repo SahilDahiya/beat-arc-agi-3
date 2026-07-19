@@ -32,6 +32,7 @@ The implemented foundation now provides:
 24. Seed every Session with canonical `notes.md`, include it once in the initial deliberation, retain its tool-mediated edits in conversation history, and direct the agent to maintain it as a pruned scientific scratchpad separating facts from hypotheses.
 25. Atomically preserve the exact `world_model_v5.py` revision at every observed level completion in an immutable, journaled `snapshots/cleared_level_N.py` artifact.
 26. Support exact-index, inclusive-range, action, terminal/reset, and prediction-status history selection. Every selected transition and earliest backtest mismatch includes deterministic connected-component boxes, color transitions and population deltas, geometric peripheral-band counts, and level-entry or prior-action references without assigning game-specific semantics.
+27. Protect Session evidence extraction with a deterministic Pydantic Evals regression over the first two successful LS20 stage-zero Sessions plus synthetic negative and malformed fixtures, and score any newly produced Session against the same separate stage-outcome contract.
 
 JSON-over-stdio transport and human-readable event projections remain the next layer over this journal. Competition submission integration, score reconstruction, candidate-model archives, and explicit process resume remain later milestones. The current loop deliberately requires a new empty Session.
 

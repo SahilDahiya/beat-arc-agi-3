@@ -11,6 +11,10 @@ Implementation targets the installed Pydantic AI 2.12 API and is grounded in the
 - [Usage limits](https://ai.pydantic.dev/agent/#usage-limits): `UsageLimits` defaults to a 50-request cap; setting its fields to `None` disables SDK enforcement.
 - [OpenAI provider](https://ai.pydantic.dev/models/openai/): an explicit `OpenAIProvider` can receive a preconfigured `AsyncOpenAI` client and be passed to `OpenAIResponsesModel`.
 - [GPT-5.5](https://developers.openai.com/api/docs/models/gpt-5.5): the requested API model ID is `gpt-5.5` and it supports structured output and function calling.
+- [Pydantic Evals overview](https://pydantic.dev/docs/ai/evals/evals/): code-first datasets organize cases and evaluators and produce evaluation reports.
+- [Pydantic Evals custom evaluators](https://pydantic.dev/docs/ai/evals/evaluators/custom/): deterministic evaluators can return named assertions with reasons.
+- [Pydantic Evals multi-run evaluation](https://pydantic.dev/docs/ai/evals/how-to/multi-run/): repeated case execution measures stochastic systems.
+- [Pydantic Evals concurrency](https://pydantic.dev/docs/ai/evals/how-to/concurrency/): case concurrency is explicit and can be restricted for resource-bound tasks.
 
 Current decisions:
 
@@ -22,3 +26,4 @@ Current decisions:
 - Configure `openai-codex:gpt-5.5`, explicitly construct `OpenAIResponsesModel` from `Settings` and harness-owned subscription credentials with `build_openai_model`, and pass that model to `build_agent`. A missing model or OAuth login fails immediately; neither triggers implicit provider configuration.
 - Use the direct OAuth/backend pattern studied in JACA: the harness performs PKCE login, stores and refreshes its own credentials, and configures a dedicated OpenAI client for the ChatGPT Codex backend. This is an implementation-specific subscription integration, not the standard OpenAI Platform API-key path.
 - Preserve JACA's streamed-request behavior at the model boundary. The ChatGPT Codex backend rejects non-streaming requests, so `OpenAICodexResponsesModel.request` directly opens and drains `request_stream`; the outer agent loop remains transport-agnostic. The public Responses API likewise defines `stream=true` as its SSE streaming mode.
+- Use code-first Pydantic Evals `Dataset` objects for immutable Session-evidence regression and ad hoc stage-outcome scoring. Deterministic custom evaluators compare declared fixture facts or observable target success, while task-recorded metrics remain diagnostic. Run persisted Session cases with `max_concurrency=1`; reserve repeated execution for future fresh live runs.

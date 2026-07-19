@@ -11,6 +11,7 @@ dependencies = [
     "arc-agi>=0.9.9",
     "httpx>=0.27",
     "pydantic-ai",
+    "pydantic-evals",
     "pydantic-settings",
 ]
 

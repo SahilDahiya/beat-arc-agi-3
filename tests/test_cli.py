@@ -133,3 +133,66 @@ def test_auth_status_and_logout_do_not_expose_tokens(monkeypatch, capsys) -> Non
     assert cli.main(["auth", "logout"]) == 0
     assert cleared is True
     assert capsys.readouterr().out == "openai-codex: logged out\n"
+
+
+def test_eval_command_runs_the_free_ls20_evidence_regression(
+    monkeypatch,
+) -> None:
+    sessions_root = object()
+    report = SimpleNamespace(print=lambda **kwargs: None)
+    captured: list[object] = []
+
+    async def run_regression(received_sessions_root):
+        captured.append(received_sessions_root)
+        return report
+
+    monkeypatch.setattr(
+        cli,
+        "Settings",
+        lambda: SimpleNamespace(sessions_root=sessions_root),
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_ls20_session_evidence_regression",
+        run_regression,
+    )
+    monkeypatch.setattr(cli, "report_passed", lambda received: received is report)
+
+    assert cli.main(["eval", "ls20-session-evidence"]) == 0
+    assert captured == [sessions_root]
+
+
+def test_eval_session_command_scores_one_persisted_session(monkeypatch) -> None:
+    sessions_root = object()
+    report = SimpleNamespace(print=lambda **kwargs: None)
+    captured: list[object] = []
+
+    async def run_session_eval(**kwargs):
+        captured.append(kwargs)
+        return report
+
+    monkeypatch.setattr(
+        cli,
+        "Settings",
+        lambda: SimpleNamespace(sessions_root=sessions_root),
+    )
+    monkeypatch.setattr(cli, "run_session_stage_eval", run_session_eval)
+    monkeypatch.setattr(cli, "report_passed", lambda received: received is report)
+
+    assert cli.main(
+        [
+            "eval",
+            "session",
+            "--session",
+            "new-live-session",
+            "--target-level",
+            "1",
+        ]
+    ) == 0
+    assert captured == [
+        {
+            "sessions_root": sessions_root,
+            "session_id": "new-live-session",
+            "target_levels_completed": 1,
+        }
+    ]
