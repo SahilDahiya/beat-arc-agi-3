@@ -2,11 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from beat_arc_agi_3.workspace import (
-    ReadFileError,
-    ReadFileQuery,
-    SessionWorkspace,
-)
+from beat_arc_agi_3.tools.read_file import ReadFileError, ReadFileQuery
+from beat_arc_agi_3.workspace import SessionWorkspace
 
 
 def test_read_file_returns_numbered_complete_text(tmp_path: Path) -> None:

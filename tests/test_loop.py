@@ -9,6 +9,7 @@ from beat_arc_agi_3.adapter import ArcGameAdapter
 from beat_arc_agi_3.agent import build_agent
 from beat_arc_agi_3.loop import LoopPolicy, run_agent_loop
 from beat_arc_agi_3.session import Session
+from beat_arc_agi_3.tools.write_file import WriteFileQuery
 
 
 def frame(
@@ -63,12 +64,19 @@ def commit(actions: list[dict[str, object]]) -> dict[str, object]:
 
 
 def create_session(tmp_path: Path) -> Session:
-    return Session.create(
+    session = Session.create(
         sessions_root=tmp_path,
         session_id="run-001",
         game_id="test-game",
         model="test:model",
     )
+    session.workspace.write_file(
+        WriteFileQuery(
+            path="world_model_v5.py",
+            content="def predict(state, action):\n    return state\n",
+        )
+    )
+    return session
 
 
 def test_loop_drops_queue_suffix_on_level_up_and_reasons_again(

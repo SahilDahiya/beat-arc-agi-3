@@ -12,7 +12,9 @@ from beat_arc_agi_3.config import Settings
 from beat_arc_agi_3.dependencies import AgentDeps, HistoryQuery
 from beat_arc_agi_3.runner import deliberate, render_observation
 from beat_arc_agi_3.schemas import CommitActions, GameObservation
-from beat_arc_agi_3.workspace import ReadFileQuery
+from beat_arc_agi_3.tools.edit_file import EditFileQuery
+from beat_arc_agi_3.tools.read_file import ReadFileQuery
+from beat_arc_agi_3.tools.write_file import WriteFileQuery
 
 
 models.ALLOW_MODEL_REQUESTS = False
@@ -29,11 +31,28 @@ class RecordingHistory:
 
 @dataclass
 class RecordingWorkspace:
-    calls: list[ReadFileQuery] = field(default_factory=list)
+    read_calls: list[ReadFileQuery] = field(default_factory=list)
+    write_calls: list[WriteFileQuery] = field(default_factory=list)
+    edit_calls: list[EditFileQuery] = field(default_factory=list)
+    existing_files: set[str] = field(
+        default_factory=lambda: {"world_model_v5.py"}
+    )
+
+    def has_file(self, path: str) -> bool:
+        return path in self.existing_files
 
     def read_file(self, query: ReadFileQuery) -> str:
-        self.calls.append(query)
+        self.read_calls.append(query)
         return "notes.md (1 lines):\n1\tconfirmed"
+
+    def write_file(self, query: WriteFileQuery) -> str:
+        self.write_calls.append(query)
+        self.existing_files.add(query.path)
+        return f"OK: wrote {len(query.content)} bytes to {query.path}."
+
+    def edit_file(self, query: EditFileQuery) -> str:
+        self.edit_calls.append(query)
+        return f"OK: replaced 1 occurrence(s) in {query.path}."
 
 
 @dataclass
@@ -96,7 +115,23 @@ def test_agent_reads_history_then_returns_typed_commit() -> None:
         assert [tool.name for tool in info.function_tools] == [
             "read_history",
             "read_file",
+            "write_file",
+            "edit_file",
         ]
+        schemas = {
+            tool.name: tool.parameters_json_schema
+            for tool in info.function_tools
+        }
+        assert set(schemas["write_file"]["properties"]) == {
+            "path",
+            "content",
+        }
+        assert set(schemas["edit_file"]["properties"]) == {
+            "path",
+            "old_string",
+            "new_string",
+            "replace_all",
+        }
         assert [tool.name for tool in info.output_tools] == ["commit_actions"]
         if len(messages) == 1:
             return ModelResponse(
@@ -176,6 +211,54 @@ def test_agent_retries_a_commit_with_an_unavailable_action() -> None:
     assert result.actions[0].action == "ACTION1"
 
 
+def test_agent_must_create_world_model_before_committing() -> None:
+    workspace = RecordingWorkspace(existing_files=set())
+    model_calls = 0
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        nonlocal model_calls
+        model_calls += 1
+        if model_calls == 1:
+            return ModelResponse(
+                parts=[ToolCallPart("commit_actions", commit_args())]
+            )
+        if model_calls == 2:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "write_file",
+                        {
+                            "path": "world_model_v5.py",
+                            "content": "def predict(state, action):\n    return state\n",
+                        },
+                    )
+                ]
+            )
+        return ModelResponse(
+            parts=[ToolCallPart("commit_actions", commit_args())]
+        )
+
+    deps = AgentDeps(
+        observation=observation(1),
+        history=RecordingHistory(),
+        workspace=workspace,
+    )
+    result = asyncio.run(
+        deliberate(
+            build_agent(FunctionModel(model)), deps, MemoryConversation()
+        )
+    )
+
+    assert model_calls == 3
+    assert result.actions[0].action == "ACTION1"
+    assert workspace.write_calls == [
+        WriteFileQuery(
+            path="world_model_v5.py",
+            content="def predict(state, action):\n    return state\n",
+        )
+    ]
+
+
 def test_deliberation_reuses_session_message_history() -> None:
     message_counts: list[int] = []
 
@@ -223,8 +306,63 @@ def test_agent_reads_a_workspace_file_then_commits() -> None:
     )
 
     assert result.actions[0].action == "ACTION1"
-    assert workspace.calls == [
+    assert workspace.read_calls == [
         ReadFileQuery(path="notes.md", offset=2, limit=10)
+    ]
+
+
+def test_agent_writes_then_edits_workspace_files_before_commit() -> None:
+    workspace = RecordingWorkspace()
+    model_calls = 0
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        nonlocal model_calls
+        model_calls += 1
+        if model_calls == 1:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "write_file",
+                        {"path": "notes.md", "content": "hypothesis"},
+                    )
+                ]
+            )
+        if model_calls == 2:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "edit_file",
+                        {
+                            "path": "notes.md",
+                            "old_string": "hypothesis",
+                            "new_string": "confirmed",
+                            "replace_all": False,
+                        },
+                    )
+                ]
+            )
+        return ModelResponse(parts=[ToolCallPart("commit_actions", commit_args())])
+
+    deps = AgentDeps(
+        observation=observation(1),
+        history=RecordingHistory(),
+        workspace=workspace,
+    )
+    result = asyncio.run(
+        deliberate(build_agent(FunctionModel(model)), deps, MemoryConversation())
+    )
+
+    assert result.actions[0].action == "ACTION1"
+    assert workspace.write_calls == [
+        WriteFileQuery(path="notes.md", content="hypothesis")
+    ]
+    assert workspace.edit_calls == [
+        EditFileQuery(
+            path="notes.md",
+            old_string="hypothesis",
+            new_string="confirmed",
+            replace_all=False,
+        )
     ]
 
 

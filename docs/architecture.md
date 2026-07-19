@@ -11,7 +11,7 @@ ARC environment creation/reset --> GameObservation
                          /       \                       |
                     AgentDeps   CommitActions             |
                  /      |       \          |              |
-        read_history read_file current  ArcAction queue    |
+        read_history file tools current  ArcAction queue   |
              |          |             one action at a time|
  TimelineHistoryReader  |                    |             |
              |      SessionWorkspace   ArcGameAdapter-step-+
@@ -23,12 +23,12 @@ Session
 ├── session.json       immutable run metadata
 ├── messages.jsonl     Pydantic AI conversation batches
 ├── timeline.jsonl     authoritative environment evidence
-└── other UTF-8 files  readable session working material
+└── other UTF-8 files  mutable session working material
 ```
 
-Python owns all harness semantics. The current agent has two read-only function tools: `read_history` for structured transition evidence and `read_file` for UTF-8 files under the active Session. `commit_actions` is a structured output tool, not a normal function tool, so a valid commit terminates deliberation. The deliberation runner has no environment dependency: it persists the completed model-message batch and returns the validated queue. Only the outer loop owns the adapter that can execute ARC actions.
+Python owns all harness semantics. The current agent has four function tools: `read_history` for structured transition evidence plus trace-derived `read_file`, `write_file`, and `edit_file` operations for UTF-8 working material under the active Session. Each file tool has its own contract and implementation under `tools/`; `SessionWorkspace` owns only shared path confinement, file-presence checks, and atomic replacement. `commit_actions` is a structured output tool, not a normal function tool, so a valid commit terminates deliberation. Its output validator requires `world_model_v5.py` to exist in the active Session and checks every queued action against the current legal actions. The deliberation runner has no environment dependency: it persists the completed model-message batch and returns the validated queue. Only the outer loop owns the adapter that can execute ARC actions.
 
-`Session` is the durable unit of one run. It owns immutable identity metadata, one game-bound `JsonlTimeline`, one append-only Pydantic AI conversation, and a read-only `SessionWorkspace` rooted at `sessions/<session-id>/`. Session creation and opening are explicit; there is no default session or automatic resume. Workspace path resolution rejects traversal and symlinks that resolve beyond that root.
+`Session` is the durable unit of one run. It owns immutable identity metadata, one game-bound `JsonlTimeline`, one append-only Pydantic AI conversation, and a `SessionWorkspace` rooted at `sessions/<session-id>/`. Session creation and opening are explicit; there is no default session or automatic resume. Workspace path resolution rejects traversal and symlinks that resolve beyond that root. Writes and successful edits replace files atomically; failed exact edits leave the prior file unchanged.
 
 `JsonlTimeline` is a single-writer log. It validates the complete persisted sequence once when opened, retains the validated sequence in memory, and appends each new action result in O(1) without reparsing old grids. The initial observation is stored once; each later record stores only the executed action and resulting observation. Full before/after `Transition` values and terminal flags are derived in memory. `TimelineHistoryReader` formats only bounded evidence from that validated source.
 
