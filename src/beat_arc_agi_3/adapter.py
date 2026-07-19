@@ -35,7 +35,10 @@ class ArcGameAdapter:
         return GameObservation.from_frame(frame)
 
     def apply(self, action: ArcAction) -> GameObservation:
-        if action.action not in self.available_actions:
+        if (
+            action.action != GameAction.RESET.name
+            and action.action not in self.available_actions
+        ):
             raise ValueError(
                 f"Action {action.action} is unavailable; "
                 f"legal actions are {self.available_actions}"

@@ -183,7 +183,7 @@ class SynthesisHarness:
                 current_grid = prediction.grid
 
         current_observation = transitions[-1].after if transitions else initial
-        for action in self._smoke_actions(current_observation.available_action_names):
+        for action in self._smoke_actions(current_observation.legal_action_names):
             runtime.predict(
                 state=state,
                 grid=current_grid,
@@ -273,7 +273,7 @@ class SynthesisHarness:
         transitions = self.timeline.transitions()
         observation = transitions[-1].after if transitions else initial
         candidates: list[ArcAction] = []
-        for action_name in observation.available_action_names:
+        for action_name in observation.legal_action_names:
             if action_name == "ACTION6":
                 candidates.extend(
                     ArcAction(action="ACTION6", x=x, y=y)

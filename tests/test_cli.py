@@ -196,3 +196,31 @@ def test_eval_session_command_scores_one_persisted_session(monkeypatch) -> None:
             "target_levels_completed": 1,
         }
     ]
+
+
+def test_eval_lifecycle_prints_deterministic_session_report(
+    monkeypatch, capsys
+) -> None:
+    sessions_root = object()
+    session = object()
+    report = SimpleNamespace(
+        model_dump_json=lambda **kwargs: '{"session_id":"session-1"}'
+    )
+    monkeypatch.setattr(
+        cli,
+        "Settings",
+        lambda: SimpleNamespace(sessions_root=sessions_root),
+    )
+    monkeypatch.setattr(
+        cli.Session,
+        "open",
+        lambda **kwargs: session,
+    )
+    monkeypatch.setattr(
+        cli,
+        "extract_level_lifecycle",
+        lambda received: report,
+    )
+
+    assert cli.main(["eval", "lifecycle", "--session", "session-1"]) == 0
+    assert capsys.readouterr().out == '{"session_id":"session-1"}\n'

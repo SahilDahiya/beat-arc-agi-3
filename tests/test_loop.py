@@ -217,6 +217,70 @@ def test_loop_policy_is_unbounded_by_default() -> None:
     assert policy.max_actions is None
 
 
+def test_loop_gives_agent_a_turn_to_explicitly_reset_after_game_over(
+    tmp_path: Path,
+) -> None:
+    environment = FakeEnvironment(
+        [
+            frame(
+                9,
+                state=GameState.GAME_OVER,
+                available_actions=[1, 2, 3, 4],
+            ),
+            frame(0),
+        ]
+    )
+    commits = 0
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        nonlocal commits
+        commits += 1
+        action = "ACTION1" if commits == 1 else "RESET"
+        return ModelResponse(
+            parts=[ToolCallPart("commit_actions", commit([{"action": action}]))]
+        )
+
+    adapter = ArcGameAdapter(environment)
+    session = create_session(
+        tmp_path,
+        world_model=(
+            "def init_state(entry_grid):\n"
+            "    return {}\n\n"
+            "def predict(state, grid, action, x=None, y=None):\n"
+            "    return grid, {\"level_up\": False, \"dead\": False, "
+            "\"win\": False}, state\n\n"
+            "def is_goal(state, grid):\n"
+            "    return False\n"
+        ),
+    )
+
+    result = asyncio.run(
+        run_agent_loop(
+            agent=build_agent(FunctionModel(model)),
+            adapter=adapter,
+            initial_observation=adapter.reset(),
+            session=session,
+            policy=LoopPolicy(max_actions=2),
+        )
+    )
+
+    assert result.stop_reason == "max_actions"
+    assert environment.actions == [
+        (GameAction.ACTION1, None),
+        (GameAction.RESET, None),
+    ]
+    transitions = session.timeline.transitions()
+    assert transitions[0].dead is True
+    assert transitions[1].action.action == "RESET"
+    turn_starts = [
+        entry.event
+        for entry in session.events.entries()
+        if entry.event.type == "turn_started"
+    ]
+    assert turn_starts[1].state is GameState.GAME_OVER
+    assert turn_starts[1].available_actions == ("RESET",)
+
+
 def test_loop_honors_the_total_action_limit(tmp_path: Path) -> None:
     environment = FakeEnvironment([frame(1), frame(2)])
 

@@ -4,8 +4,16 @@ from arcengine import FrameData, GameState
 
 from beat_arc_agi_3.schemas import ArcAction, GameObservation
 from beat_arc_agi_3.strategy import (
+    render_current_level_evidence,
     render_experiment_context,
     render_strategy_context,
+)
+from beat_arc_agi_3.events import (
+    BacktestCompletedEvent,
+    BfsCompletedEvent,
+    EventJournal,
+    TurnStartedEvent,
+    WorldModelInstalledEvent,
 )
 from beat_arc_agi_3.timeline import JsonlTimeline, ModelPredictionRecord
 
@@ -144,7 +152,10 @@ def test_strategy_context_grounds_the_initial_level_entry(tmp_path: Path) -> Non
         )
     )
 
-    context = render_strategy_context(timeline)
+    context = render_strategy_context(
+        timeline,
+        EventJournal.create(tmp_path / "events.jsonl", session_id="test"),
+    )
 
     assert "Level-entry grounding protocol" in context
     assert "trigger=session_start; level=0/2" in context
@@ -159,6 +170,9 @@ def test_strategy_context_grounds_the_initial_level_entry(tmp_path: Path) -> Non
     assert "Cheapest discriminating probe" in context
     assert "Temporary goal" in context
     assert "predicate, evidence, and falsifier" in context
+    assert "Decision mode" in context
+    assert "goal_search" in context
+    assert "discriminating_experiment" in context
     assert "Harness experiment evidence" in context
 
 
@@ -177,8 +191,11 @@ def test_strategy_context_repeats_grounding_only_at_real_level_entry(
         prediction=prediction(1),
     )
 
+    events = EventJournal.create(
+        tmp_path / "events.jsonl", session_id="test"
+    )
     assert "Level-entry grounding protocol" not in render_strategy_context(
-        timeline
+        timeline, events
     )
 
     timeline.append(
@@ -188,7 +205,84 @@ def test_strategy_context_repeats_grounding_only_at_real_level_entry(
         prediction=prediction(2, level_up=True),
     )
 
-    context = render_strategy_context(timeline)
+    context = render_strategy_context(timeline, events)
 
     assert "Level-entry grounding protocol" in context
     assert "trigger=transition #1 level_up; level=1/2" in context
+
+
+def test_current_level_evidence_separates_replay_green_from_online_support(
+    tmp_path: Path,
+) -> None:
+    timeline = JsonlTimeline.create(
+        tmp_path / "timeline.jsonl",
+        game_id="test-game",
+    )
+    timeline.initialize(observation(0))
+    timeline.append(
+        action=ArcAction(action="ACTION1"),
+        after=observation(1, levels_completed=1),
+        model_revision="revision-1",
+        prediction=prediction(1, level_up=True),
+    )
+    timeline.append(
+        action=ArcAction(action="ACTION6", x=4, y=5),
+        after=observation(9, levels_completed=1),
+        model_revision="revision-2",
+        prediction=prediction(3),
+    )
+    events = EventJournal.create(
+        tmp_path / "events.jsonl", session_id="test"
+    )
+    events.append(
+        turn=2,
+        event=TurnStartedEvent(
+            summary="Turn 2",
+            state=GameState.NOT_FINISHED,
+            levels_completed=1,
+            available_actions=("ACTION1", "ACTION2"),
+        ),
+    )
+    events.append(
+        turn=2,
+        event=WorldModelInstalledEvent(
+            summary="Installed revision 3",
+            revision="revision-3",
+        ),
+    )
+    events.append(
+        turn=2,
+        event=BacktestCompletedEvent(
+            summary="Full replay green",
+            revision="revision-3",
+            status="green",
+            timeline_transitions=2,
+            exact_transitions=2,
+        ),
+    )
+    events.append(
+        turn=2,
+        event=BfsCompletedEvent(
+            summary="Search exhausted",
+            revision="revision-3",
+            target="is_goal",
+            status="exhausted",
+            max_depth=8,
+            node_budget=100,
+            expanded_nodes=100,
+            distinct_states=70,
+            depth=None,
+            actions=(),
+        ),
+    )
+
+    context = render_current_level_evidence(timeline, events)
+
+    assert "Current-level evidence: level=1" in context
+    assert "transitions=1; exact=0; mismatch=1; unchecked=0" in context
+    assert "actions=ACTION6:1; ACTION6 coordinates=(4,5)" in context
+    assert "active revision=revision-3; full replay=current-prefix-green" in context
+    assert "active-revision online support exact=0; mismatch=0; unchecked=0" in context
+    assert "no online transition support on the current level" in context
+    assert "latest current-level mismatch=transition #1 revision revision-2" in context
+    assert "BFS attempts=1; found=0; exhausted=1" in context

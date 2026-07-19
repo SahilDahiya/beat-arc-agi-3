@@ -34,3 +34,12 @@ def test_adapter_exposes_actions_and_returns_typed_observation() -> None:
 
     assert environment.actions == [(GameAction.ACTION6, {"x": 4, "y": 5})]
     assert observation.state is GameState.WIN
+
+
+def test_adapter_issues_reset_when_toolkit_action_space_omits_it() -> None:
+    environment = FakeEnvironment()
+    adapter = ArcGameAdapter(environment=environment)
+
+    adapter.apply(ArcAction(action="RESET"))
+
+    assert environment.actions == [(GameAction.RESET, None)]

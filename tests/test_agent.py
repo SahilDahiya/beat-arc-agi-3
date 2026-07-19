@@ -49,6 +49,12 @@ def test_agent_instructions_require_revisable_level_entry_grounding() -> None:
     assert (
         "Do not treat is_goal returning False everywhere as final" in instructions
     )
+    assert "Decision mode" in instructions
+    assert "goal_search" in instructions
+    assert "discriminating_experiment" in instructions
+    assert "selected hypothesis" in instructions
+    assert "competing hypothesis" in instructions
+    assert "BFS EXHAUSTED" in instructions
 
 
 @dataclass
@@ -330,6 +336,59 @@ def test_agent_reads_history_then_returns_typed_commit() -> None:
         "tool_completed",
         "commit_accepted",
     ]
+
+
+def test_agent_records_structured_bfs_outcome_before_tool_completion() -> None:
+    events = RecordingEvents()
+    calls = 0
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "run_bfs",
+                        {
+                            "target": "level_up",
+                            "max_depth": 8,
+                            "node_budget": 100,
+                        },
+                    )
+                ]
+            )
+        return ModelResponse(parts=[ToolCallPart("commit_actions", commit_args())])
+
+    result = asyncio.run(
+        deliberate(
+            build_agent(FunctionModel(model)),
+            AgentDeps(
+                observation=observation(1),
+                history=RecordingHistory(),
+                workspace=RecordingWorkspace(),
+                synthesis=RecordingSynthesis(),
+                events=events,
+                turn=1,
+            ),
+            MemoryConversation(),
+        )
+    )
+
+    assert result.actions[0].action == "ACTION1"
+    event_types = [event.type for _, event in events.recorded]
+    assert event_types == [
+        "deliberation_started",
+        "tool_started",
+        "bfs_completed",
+        "tool_completed",
+        "commit_accepted",
+    ]
+    bfs = events.recorded[2][1]
+    assert bfs.target == "level_up"
+    assert bfs.status == "found"
+    assert bfs.max_depth == 8
+    assert bfs.node_budget == 100
     assert all(turn == 1 for turn, _ in events.recorded)
 
 
@@ -427,6 +486,43 @@ def test_agent_retries_a_commit_with_an_unavailable_action() -> None:
 
     assert attempts == 2
     assert result.actions[0].action == "ACTION1"
+
+
+def test_agent_accepts_only_reset_after_game_over() -> None:
+    attempts = 0
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        nonlocal attempts
+        attempts += 1
+        action = "ACTION1" if attempts == 1 else "RESET"
+        return ModelResponse(
+            parts=[ToolCallPart("commit_actions", commit_args(action))]
+        )
+
+    deps = AgentDeps(
+        observation=GameObservation.from_frame(
+            FrameData(
+                game_id="test-game",
+                frame=[[[0]]],
+                state=GameState.GAME_OVER,
+                available_actions=[1, 2, 3, 4],
+            )
+        ),
+        history=RecordingHistory(),
+        workspace=RecordingWorkspace(),
+        synthesis=RecordingSynthesis(),
+        events=RecordingEvents(),
+        turn=1,
+    )
+
+    result = asyncio.run(
+        deliberate(
+            build_agent(FunctionModel(model)), deps, MemoryConversation()
+        )
+    )
+
+    assert attempts == 2
+    assert result.actions[0].action == "RESET"
 
 
 def test_agent_must_create_world_model_before_committing() -> None:
@@ -724,7 +820,23 @@ def test_observation_renderer_is_compact_and_uses_hex_rows() -> None:
     )
 
     assert "State: NOT_FINISHED | level 2/4" in rendered
-    assert "Legal actions: [1, 6]" in rendered
+    assert "Legal actions: ACTION1, ACTION6" in rendered
     assert "shape=2x3" in rendered
     assert "0af\n123" in rendered
     assert '"frame"' not in rendered
+
+
+def test_observation_renderer_exposes_effective_game_over_legality() -> None:
+    rendered = render_observation(
+        GameObservation.from_frame(
+            FrameData(
+                game_id="test-game",
+                frame=[[[0]]],
+                state=GameState.GAME_OVER,
+                available_actions=[1, 2, 3, 4],
+            )
+        )
+    )
+
+    assert "Legal actions: RESET" in rendered
+    assert "ARC-advertised actions: ACTION1, ACTION2, ACTION3, ACTION4" in rendered

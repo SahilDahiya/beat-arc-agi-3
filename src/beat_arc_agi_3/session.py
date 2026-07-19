@@ -65,9 +65,16 @@ evidence arrives.
 
 ## Temporary goal
 
+- Selected hypothesis:
+- Competing hypothesis:
 - Predicate:
 - Evidence:
 - Falsifier:
+
+## Decision mode
+
+- Mode: goal_search | discriminating_experiment
+- Why:
 
 ## Hypotheses to test
 

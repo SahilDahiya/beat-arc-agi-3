@@ -90,6 +90,19 @@ class BacktestCompletedEvent(_Event):
     exact_transitions: int = Field(ge=0)
 
 
+class BfsCompletedEvent(_Event):
+    type: Literal["bfs_completed"] = "bfs_completed"
+    revision: str = Field(min_length=1)
+    target: Literal["is_goal", "level_up", "win"]
+    status: Literal["found", "exhausted"]
+    max_depth: int = Field(ge=0)
+    node_budget: int = Field(ge=1)
+    expanded_nodes: int = Field(ge=0)
+    distinct_states: int = Field(ge=1)
+    depth: int | None = Field(default=None, ge=0)
+    actions: tuple[ArcAction, ...]
+
+
 class CommitAcceptedEvent(_Event):
     type: Literal["commit_accepted"] = "commit_accepted"
     actions: tuple[ArcAction, ...] = Field(min_length=1)
@@ -186,6 +199,7 @@ ArcEvent = Annotated[
     | ToolFailedEvent
     | WorldModelInstalledEvent
     | BacktestCompletedEvent
+    | BfsCompletedEvent
     | CommitAcceptedEvent
     | ActionStartedEvent
     | ActionCompletedEvent

@@ -36,10 +36,15 @@ def render_observation(observation: GameObservation) -> str:
         grid = f"shape={len(observation.grid)}x{width}\n{rows}"
     else:
         grid = "shape=0x0\n(empty)"
+    legal_actions = ", ".join(observation.legal_action_names) or "none"
+    advertised_actions = ", ".join(observation.available_action_names) or "none"
+    advertised = ""
+    if observation.legal_action_names != observation.available_action_names:
+        advertised = f"\nARC-advertised actions: {advertised_actions}"
     return (
         f"State: {observation.state.value} | "
         f"level {observation.levels_completed}/{observation.win_levels}\n"
-        f"Legal actions: {list(observation.available_actions)}\n"
+        f"Legal actions: {legal_actions}{advertised}\n"
         f"Grid:\n{grid}"
     )
 

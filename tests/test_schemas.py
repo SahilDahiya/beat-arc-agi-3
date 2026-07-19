@@ -38,6 +38,25 @@ def test_observation_separates_intermediate_ticks_from_the_final_grid() -> None:
     assert observation.ticks == (((1,),), ((2,),))
 
 
+def test_game_over_observation_preserves_raw_actions_but_only_reset_is_legal() -> None:
+    observation = GameObservation.from_frame(
+        FrameData(
+            game_id="ls20",
+            frame=[[[1]]],
+            state=GameState.GAME_OVER,
+            available_actions=[1, 2, 3, 4],
+        )
+    )
+
+    assert observation.available_action_names == (
+        "ACTION1",
+        "ACTION2",
+        "ACTION3",
+        "ACTION4",
+    )
+    assert observation.legal_action_names == ("RESET",)
+
+
 def test_simple_action_converts_to_game_action() -> None:
     decision = ArcAction(action="ACTION1")
 

@@ -34,6 +34,10 @@ The implemented foundation now provides:
 26. Support exact-index, inclusive-range, action, terminal/reset, and prediction-status history selection. Every selected transition and earliest backtest mismatch includes deterministic connected-component boxes, color transitions and population deltas, geometric peripheral-band counts, and level-entry or prior-action references without assigning game-specific semantics.
 27. Protect Session evidence extraction with a deterministic Pydantic Evals regression over the first two successful LS20 stage-zero Sessions plus synthetic negative and malformed fixtures, and score any newly produced Session against the same separate stage-outcome contract.
 28. At the initial observation and after every observed level completion, inject a deterministic level-entry grounding protocol. It exposes only structural entry facts, requires facts and hypotheses to remain separate in `notes.md`, and makes the agent maintain a revisable temporary goal with an executable `is_goal` predicate, supporting evidence, falsifier, known unknowns, and cheapest discriminating probe.
+29. Preserve raw ARC-advertised actions while deriving state-aware effective legality: `GAME_OVER` gives the agent an explicit RESET-only turn, RESET is journaled as a normal transition, and `WIN` remains terminal.
+30. Record bounded BFS outcomes as typed canonical events and expose a deterministic per-level lifecycle report over action, prediction, synthesis, search, repair, queue, and terminal evidence.
+31. Separate full-prefix replay trust from active-revision online evidence on the current level in every deliberation context.
+32. Make synthesis mode explicit in the scientific scratchpad: use evidence-backed `goal_search` with an executable temporary predicate, or a bounded `discriminating_experiment` against a competing hypothesis.
 
 JSON-over-stdio transport and human-readable event projections remain the next layer over this journal. Competition submission integration, score reconstruction, candidate-model archives, and explicit process resume remain later milestones. The current loop deliberately requires a new empty Session.
 

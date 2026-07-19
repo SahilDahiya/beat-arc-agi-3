@@ -31,8 +31,8 @@ class RunBfsQuery(BaseModel):
 def execute_run_bfs(
     harness: SynthesisHarness,
     query: RunBfsQuery,
-) -> str:
-    report = harness.run_bfs(
+) -> BfsReport:
+    return harness.run_bfs(
         target=query.target,
         max_depth=query.max_depth,
         node_budget=query.node_budget,
@@ -42,7 +42,6 @@ def execute_run_bfs(
         ),
         timeout_seconds=query.timeout_seconds,
     )
-    return render_bfs_report(report)
 
 
 def render_bfs_report(report: BfsReport) -> str:

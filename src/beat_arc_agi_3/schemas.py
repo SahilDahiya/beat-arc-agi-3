@@ -59,10 +59,22 @@ class GameObservation(BaseModel):
 
     @property
     def available_action_names(self) -> tuple[str, ...]:
+        """Return the raw actions advertised by the ARC response."""
+
         return tuple(
             GameAction.from_id(action_id).name
             for action_id in self.available_actions
         )
+
+    @property
+    def legal_action_names(self) -> tuple[ActionName, ...]:
+        """Return canonical state-aware actions the harness may execute."""
+
+        if self.state is GameState.WIN:
+            return ()
+        if self.state is GameState.GAME_OVER:
+            return ("RESET",)
+        return self.available_action_names
 
 
 class ArcAction(BaseModel):

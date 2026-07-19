@@ -58,6 +58,26 @@ compares historical and synthetic fixtures with expected facts;
 deterministic. There is no LLM judge and no Logfire or OpenTelemetry
 requirement.
 
+## Per-level lifecycle report
+
+Use the process report to compare where an agent spent its steps and how its
+synthesis loop changed from level entry to exit:
+
+```bash
+uv run python -m beat_arc_agi_3 eval lifecycle --session SESSION_ID
+```
+
+The command emits deterministic JSON and performs no model request or ARC
+action. Each transition is assigned to the level on which its action began.
+For every observed level, the report includes entry and exit transition/turn,
+action and click-coordinate distributions, exact/mismatch/unchecked counts,
+distinct observable states, model installs and backtests, mismatch-to-next-green
+repair spans, structured BFS outcomes, committed queue sizes and cancellations,
+death/reset/progress/win facts, failures/interruption, and tool counts grouped
+into grounding, synthesis, verification, and search according to fixed tool
+contracts. These are process measurements, not success criteria and not an
+inference about the model's private intent.
+
 ## Iterative agent-development loop
 
 For one agent or harness change: identify one failure from preserved Session

@@ -9,6 +9,7 @@ from beat_arc_agi_3.config import Settings
 from beat_arc_agi_3.evals.ls20_evidence import (
     run_ls20_session_evidence_regression,
 )
+from beat_arc_agi_3.evals.level_lifecycle import extract_level_lifecycle
 from beat_arc_agi_3.evals.session_stage import (
     report_passed,
     run_session_stage_eval,
@@ -23,6 +24,7 @@ from beat_arc_agi_3.oauth_store import (
     set_openai_codex_credentials,
 )
 from beat_arc_agi_3.process import ProcessConfig, run_process
+from beat_arc_agi_3.session import Session
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -62,6 +64,11 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         type=int,
     )
+    lifecycle_parser = eval_subparsers.add_parser(
+        "lifecycle",
+        help="report deterministic per-level Session evidence",
+    )
+    lifecycle_parser.add_argument("--session", required=True)
 
     auth_parser = subparsers.add_parser(
         "auth",
@@ -113,6 +120,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "eval":
         settings = Settings()
+        if args.eval_command == "lifecycle":
+            session = Session.open(
+                sessions_root=settings.sessions_root,
+                session_id=args.session,
+            )
+            report = extract_level_lifecycle(session)
+            print(report.model_dump_json(indent=2))
+            return 0
         if args.eval_command == "ls20-session-evidence":
             report = asyncio.run(
                 run_ls20_session_evidence_regression(settings.sessions_root)

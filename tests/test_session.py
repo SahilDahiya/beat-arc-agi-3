@@ -48,9 +48,14 @@ def test_session_create_owns_metadata_and_timeline(tmp_path: Path) -> None:
     assert "### Known unknowns" in notes
     assert "### Cheapest discriminating probe" in notes
     assert "## Temporary goal" in notes
+    assert "- Selected hypothesis:" in notes
+    assert "- Competing hypothesis:" in notes
     assert "- Predicate:" in notes
     assert "- Evidence:" in notes
     assert "- Falsifier:" in notes
+    assert "## Decision mode" in notes
+    assert "- Mode: goal_search | discriminating_experiment" in notes
+    assert "- Why:" in notes
     assert "## Hypotheses to test" in notes
     assert "## Confirmed facts" in notes
     assert "## Current plan" in notes

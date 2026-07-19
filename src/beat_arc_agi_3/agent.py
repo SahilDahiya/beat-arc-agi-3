@@ -19,6 +19,7 @@ from beat_arc_agi_3.dependencies import (
 )
 from beat_arc_agi_3.events import (
     BacktestCompletedEvent,
+    BfsCompletedEvent,
     ToolCompletedEvent,
     ToolFailedEvent,
     ToolStartedEvent,
@@ -40,6 +41,7 @@ from beat_arc_agi_3.tools.run_bfs import (
     ClickCandidate,
     RunBfsQuery,
     execute_run_bfs,
+    render_bfs_report,
 )
 from beat_arc_agi_3.tools.run_python import (
     RunPythonError,
@@ -120,16 +122,18 @@ structural facts rather than semantic labels. Use
 read_file, write_file, and edit_file for durable UTF-8 working material inside
 this session. notes.md is your canonical living scientific scratchpad. Maintain
 and prune it every turn under Confirmed mechanics, Current level, Level-entry
-grounding, Temporary goal, Hypotheses to test, Confirmed facts, and Current
-plan. Within Level-entry grounding, keep these explicit:
+grounding, Temporary goal, Decision mode, Hypotheses to test, Confirmed facts,
+and Current plan. Within Level-entry grounding, keep these explicit:
 - Observed facts
 - Hypotheses
 - Known unknowns
 - Cheapest discriminating probe
 When the harness shows the level-entry protocol, complete these structures
 before committing a route, and re-run this protocol after every observed
-level_up. Under Temporary goal, record a predicate, evidence, and falsifier.
-Keep it revisable and encode its best-supported current form in is_goal. Do not
+level_up. Under Temporary goal, record the selected hypothesis, a competing
+hypothesis, predicate, evidence, and falsifier. Keep it revisable and encode
+its best-supported current form in is_goal. Under Decision mode, explicitly
+choose goal_search or discriminating_experiment and record why. Do not
 treat is_goal returning False everywhere as final; if positive goal evidence is
 insufficient, record what evidence is missing and choose the cheapest probe
 that could supply it. Never promote a hypothesis to a fact without real
@@ -153,7 +157,13 @@ Before committing a long action sequence, distinguish the playable region from
 persistent HUD, status, inventory, or progress indicators and encode that
 separation in the model when the evidence supports it.
 Use run_bfs only on that green revision when model-space search is useful; its
-returned plan is valid only for the revision named in the result.
+returned plan is valid only for the revision named in the result. Choose
+goal_search only when the temporary goal has evidence, a falsifier, and a green
+executable is_goal predicate. Otherwise choose discriminating_experiment and
+commit a bounded probe that separates the selected hypothesis from its nearest
+competitor. BFS EXHAUSTED refutes reachability only under that exact revision,
+predicate, action candidates, depth, and node budget; it is not proof that the
+real level has no solution.
 When ready, call commit_actions with a non-empty ordered queue, the reason for
 the queue, and a suggestion for the next deliberation turn. A green current
 revision permits a prediction-guarded multi-action queue. Use known modeled
@@ -461,8 +471,28 @@ def build_agent(
             click_candidates=tuple(click_candidates or ()),
             timeout_seconds=timeout_seconds,
         )
+
+        def record_bfs(report) -> None:
+            ctx.deps.events.append(
+                turn=ctx.deps.turn,
+                event=BfsCompletedEvent(
+                    summary=(
+                        f"BFS {report.status} for {report.target} on revision "
+                        f"{report.revision[:12]}"
+                    ),
+                    revision=report.revision,
+                    target=report.target,
+                    status=report.status,
+                    max_depth=query.max_depth,
+                    node_budget=query.node_budget,
+                    expanded_nodes=report.expanded_nodes,
+                    distinct_states=report.distinct_states,
+                    depth=report.depth,
+                    actions=report.actions,
+                ),
+            )
         try:
-            return await _run_recorded_tool(
+            report = await _run_recorded_tool(
                 ctx,
                 tool_name="run_bfs",
                 started_summary=(
@@ -475,15 +505,17 @@ def build_agent(
                     ctx.deps.synthesis,
                     query,
                 ),
+                on_success=record_bfs,
             )
         except (BacktestRequiredError, WorldModelError, ValueError) as exc:
             raise ModelRetry(str(exc)) from exc
+        return render_bfs_report(report)
 
     @agent.output_validator
     async def validate_commit(
         ctx: RunContext[AgentDeps], output: CommitActions
     ) -> CommitActions:
-        legal = set(ctx.deps.observation.available_action_names)
+        legal = set(ctx.deps.observation.legal_action_names)
         unavailable = sorted(
             {action.action for action in output.actions if action.action not in legal}
         )

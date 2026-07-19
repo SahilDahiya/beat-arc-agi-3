@@ -4,12 +4,14 @@ from pathlib import Path
 import pytest
 
 from beat_arc_agi_3.events import (
+    BfsCompletedEvent,
     DeliberationStartedEvent,
     EventJournal,
     EventJournalCorruptionError,
     ToolCompletedEvent,
     ToolStartedEvent,
 )
+from beat_arc_agi_3.schemas import ArcAction
 
 
 def test_event_journal_appends_contiguous_durable_entries(tmp_path: Path) -> None:
@@ -81,3 +83,30 @@ def test_event_journal_rejects_a_different_session_identity(
 
     with pytest.raises(EventJournalCorruptionError, match="belongs to session"):
         EventJournal(path, session_id="run-002")
+
+
+def test_event_journal_round_trips_bfs_outcome_evidence(tmp_path: Path) -> None:
+    path = tmp_path / "events.jsonl"
+    journal = EventJournal.create(path, session_id="run-001")
+    journal.append(
+        turn=2,
+        event=BfsCompletedEvent(
+            summary="BFS found a level-up plan",
+            revision="revision-1",
+            target="level_up",
+            status="found",
+            max_depth=12,
+            node_budget=500,
+            expanded_nodes=27,
+            distinct_states=19,
+            depth=3,
+            actions=(ArcAction(action="ACTION1"),),
+        ),
+    )
+
+    reopened = EventJournal(path, session_id="run-001")
+    event = reopened.entries()[0].event
+    assert event.type == "bfs_completed"
+    assert event.status == "found"
+    assert event.depth == 3
+    assert event.actions == (ArcAction(action="ACTION1"),)

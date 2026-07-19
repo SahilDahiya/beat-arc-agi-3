@@ -7,7 +7,7 @@ read_when: you need the canonical direction, architecture, contracts, or impleme
 - [Contracts](contracts.md): canonical Python types and invariants.
 - [Configuration](configuration.md): required resources, current policy defaults, and the configurable process direction.
 - [Grounding](grounding.md): source-backed Pydantic AI decisions.
-- [Evaluation](evaluation.md): Session-evidence regression and ad hoc stage scoring.
+- [Evaluation](evaluation.md): Session-evidence regression, ad hoc stage scoring, and deterministic per-level lifecycle reports.
 - [Schema article synthesis](../data/schema-harness/article.md): the harness we are studying.
 - [Trace tool analysis](../data/arc-agi-3-schema-traces/TRACE_TOOL_ANALYSIS.md): observed tool behavior in released traces.
 - [Theoretical grounding](../data/schema-harness/theoretical-grounding.md): links between the traces and the MIT synthesis course.
@@ -58,4 +58,11 @@ Score any newly produced Session with the same stage-outcome rules:
 uv run python -m beat_arc_agi_3 eval session \
     --session SESSION_ID \
     --target-level 1
+```
+
+Inspect how synthesis work and actions were distributed across every observed
+level in one Session:
+
+```bash
+uv run python -m beat_arc_agi_3 eval lifecycle --session SESSION_ID
 ```

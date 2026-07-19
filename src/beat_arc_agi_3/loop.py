@@ -103,7 +103,7 @@ async def run_agent_loop(
     actions_taken = 0
     turn_context = (
         "This is the initial observation for the session.\n"
-        f"{render_strategy_context(session.timeline)}"
+        f"{render_strategy_context(session.timeline, session.events)}"
     )
     history = TimelineHistoryReader(session.timeline)
 
@@ -141,7 +141,7 @@ async def run_agent_loop(
                 return complete("max_actions")
             if policy.max_turns is not None and turns >= policy.max_turns:
                 return complete("max_turns")
-            if not current.available_actions:
+            if not current.legal_action_names:
                 return complete("no_legal_actions")
 
             turn_number = turns + 1
@@ -155,7 +155,7 @@ async def run_agent_loop(
                     ),
                     state=current.state,
                     levels_completed=current.levels_completed,
-                    available_actions=current.available_action_names,
+                    available_actions=current.legal_action_names,
                 ),
             )
             commit = await deliberate(
@@ -196,7 +196,7 @@ async def run_agent_loop(
                     queue_stop = "the action budget was exhausted"
                     queue_cancel_reason = "max_actions"
                     break
-                if action.action not in adapter.available_actions:
+                if action.action not in current.legal_action_names:
                     queue_stop = (
                         f"{action.action} was no longer legal; remaining "
                         "actions were dropped"
@@ -362,7 +362,7 @@ async def run_agent_loop(
                 f"{current.levels_completed}; state "
                 f"{turn_start.state.value}→{current.state.value}. "
                 f"The previous intent was: {commit.reason}"
-                f"\n{render_strategy_context(session.timeline)}"
+                f"\n{render_strategy_context(session.timeline, session.events)}"
             )
     except (KeyboardInterrupt, asyncio.CancelledError) as exc:
         message = str(exc).strip() or "run interrupted"
