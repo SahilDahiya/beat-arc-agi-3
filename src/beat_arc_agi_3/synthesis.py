@@ -5,6 +5,10 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from beat_arc_agi_3.schemas import ArcAction, Grid
+from beat_arc_agi_3.grid_analysis import (
+    GridChangeSummary,
+    summarize_grid_change,
+)
 from beat_arc_agi_3.timeline import (
     JsonlTimeline,
     ModelPredictionRecord,
@@ -41,6 +45,8 @@ class BacktestMismatch(BaseModel):
     action: ArcAction
     differing_cells: int = Field(ge=0)
     differences: tuple[GridDifference, ...]
+    difference_summary: GridChangeSummary
+    actual_transition_summary: GridChangeSummary
     predicted_flags: PredictedFlags
     actual_flags: PredictedFlags
 
@@ -373,11 +379,25 @@ class SynthesisHarness:
         )
         if not differences and prediction.flags == actual_flags:
             return None
+        difference_summary = summarize_grid_change(
+            prediction.grid,
+            transition.after.grid,
+        )
+        if terminal:
+            difference_summary = summarize_grid_change(
+                prediction.grid,
+                prediction.grid,
+            )
         return BacktestMismatch(
             transition_index=transition.index,
             action=transition.action,
             differing_cells=len(differences),
             differences=tuple(differences[:max_details]),
+            difference_summary=difference_summary,
+            actual_transition_summary=summarize_grid_change(
+                transition.before.grid,
+                transition.after.grid,
+            ),
             predicted_flags=prediction.flags,
             actual_flags=actual_flags,
         )

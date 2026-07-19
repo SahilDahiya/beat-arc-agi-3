@@ -10,7 +10,13 @@ from pydantic_ai.models import Model
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from beat_arc_agi_3.config import Settings
-from beat_arc_agi_3.dependencies import AgentDeps, HistoryDetail, HistoryQuery
+from beat_arc_agi_3.dependencies import (
+    AgentDeps,
+    HistoryDetail,
+    HistoryFlag,
+    HistoryQuery,
+    PredictionStatus,
+)
 from beat_arc_agi_3.events import (
     BacktestCompletedEvent,
     ToolCompletedEvent,
@@ -106,7 +112,11 @@ async def _run_recorded_tool(
 INSTRUCTIONS = """
 You are an ARC-AGI-3 deliberation agent. Infer useful next actions from the
 current observation and recorded real transitions. You may inspect history with
-read_history and analyze read-only Session evidence with run_python. Use
+read_history and analyze read-only Session evidence with run_python. Prefer
+exact indices, bounded ranges, and action/flag/prediction filters when repairing
+a mechanism. Treat history component boxes, color-count changes, geometric
+peripheral-band counts, level-entry distance, and prior same-action indices as
+structural facts rather than semantic labels. Use
 read_file, write_file, and edit_file for durable UTF-8 working material inside
 this session. notes.md is your canonical living scientific scratchpad. Maintain
 and prune it every turn under Confirmed mechanics, Current level, Hypotheses to
@@ -167,18 +177,49 @@ def build_agent(
     async def read_history(
         ctx: RunContext[AgentDeps],
         detail: HistoryDetail = "brief",
-        limit: int = 20,
+        limit: int | None = None,
+        indices: list[int] | None = None,
+        start: int | None = None,
+        end: int | None = None,
+        action: int | None = None,
+        flags: HistoryFlag | None = None,
+        prediction_status: PredictionStatus | None = None,
     ) -> str:
-        """Read recent real transitions at the requested level of detail."""
+        """Read selected real transitions with factual structural summaries.
 
-        query = HistoryQuery(detail=detail, limit=limit)
-        return await _run_recorded_tool(
-            ctx,
-            tool_name="read_history",
-            started_summary=f"Reading {detail} history, limit {limit}",
-            completed_summary=f"Read {detail} history",
-            operation=lambda: ctx.deps.history.read(query),
-        )
+        Args:
+            detail: Brief facts, full before/after grids, or animation ticks.
+            limit: Maximum selected transitions; defaults to 20 for recent or
+                filtered queries. Explicit indices and ranges are otherwise
+                returned completely, up to the contract bound.
+            indices: Exact zero-based indices; negative indices count backward.
+            start: Inclusive first transition index for a range.
+            end: Inclusive last transition index for a range.
+            action: Numeric ARC action filter from 0 through 7.
+            flags: Terminal, reset, or mismatch fact to require.
+            prediction_status: Exact, mismatch, or unchecked prediction filter.
+        """
+
+        try:
+            query = HistoryQuery(
+                detail=detail,
+                limit=limit,
+                indices=None if indices is None else tuple(indices),
+                start=start,
+                end=end,
+                action=action,
+                flags=flags,
+                prediction_status=prediction_status,
+            )
+            return await _run_recorded_tool(
+                ctx,
+                tool_name="read_history",
+                started_summary=f"Reading selected {detail} history",
+                completed_summary=f"Read selected {detail} history",
+                operation=lambda: ctx.deps.history.read(query),
+            )
+        except ValueError as exc:
+            raise ModelRetry(str(exc)) from exc
 
     @agent.tool
     async def read_file(

@@ -8,6 +8,7 @@ from beat_arc_agi_3.synthesis import (
     BacktestRequiredError,
     SynthesisHarness,
 )
+from beat_arc_agi_3.tools.run_backtest import render_backtest_report
 from beat_arc_agi_3.timeline import JsonlTimeline
 from beat_arc_agi_3.timeline import ModelPredictionRecord
 from beat_arc_agi_3.world_model import WorldModelContractError
@@ -134,6 +135,21 @@ def test_backtest_reports_the_earliest_counterexample(tmp_path: Path) -> None:
         "predicted": 2,
         "actual": 3,
     }
+    assert report.mismatch.difference_summary.changed_cells == 1
+    assert report.mismatch.difference_summary.component_count == 1
+    assert report.mismatch.difference_summary.components[0].model_dump() == {
+        "cells": 1,
+        "top": 0,
+        "left": 0,
+        "bottom": 0,
+        "right": 0,
+        "touches_edge": True,
+    }
+    assert report.mismatch.actual_transition_summary.changed_cells == 1
+    rendered = render_backtest_report(report)
+    assert "prediction-vs-actual structure:" in rendered
+    assert "observed before-vs-after structure:" in rendered
+    assert "bboxes=[(0,0)-(0,0):1:edge]" in rendered
     with pytest.raises(BacktestRequiredError, match="has a mismatch"):
         harness.require_green()
 

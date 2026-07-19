@@ -1,9 +1,12 @@
 import asyncio
 from pathlib import Path
 
+import pytest
 from arcengine import FrameData, GameState
+from pydantic import ValidationError
 
 from beat_arc_agi_3.dependencies import HistoryQuery
+from beat_arc_agi_3.grid_analysis import summarize_grid_change
 from beat_arc_agi_3.history import TimelineHistoryReader
 from beat_arc_agi_3.schemas import ArcAction, GameObservation
 from beat_arc_agi_3.timeline import JsonlTimeline, ModelPredictionRecord
@@ -32,6 +35,10 @@ def simple_action() -> ArcAction:
 
 def click_action() -> ArcAction:
     return ArcAction(action="ACTION6", x=3, y=7)
+
+
+def reset_action() -> ArcAction:
+    return ArcAction(action="RESET")
 
 
 def prediction(
@@ -152,3 +159,211 @@ def test_history_labels_an_unchecked_action_without_a_prediction(
 
     assert "model_mismatches=0 unchecked=1" in output
     assert "model=unchecked revision=unchecked-re" in output
+
+
+def test_history_selects_exact_indices_including_negative_indices(
+    tmp_path: Path,
+) -> None:
+    reader = TimelineHistoryReader(populated_timeline(tmp_path / "timeline.jsonl"))
+
+    output = asyncio.run(
+        reader.read(HistoryQuery(detail="brief", indices=(0, -1)))
+    )
+
+    assert "showing indices [0, -1] -> 2 steps" in output
+    assert "#0 action=1" in output
+    assert "#1 action=6" not in output
+    assert "#2 action=1" in output
+
+
+def test_history_selects_an_inclusive_range_and_combines_filters(
+    tmp_path: Path,
+) -> None:
+    reader = TimelineHistoryReader(populated_timeline(tmp_path / "timeline.jsonl"))
+
+    output = asyncio.run(
+        reader.read(
+            HistoryQuery(
+                detail="brief",
+                start=0,
+                end=2,
+                action=6,
+                flags="level_up",
+                prediction_status="exact",
+            )
+        )
+    )
+
+    assert "showing range #0..#2 -> 1 steps" in output
+    assert "filters: action=6 flags=level_up prediction_status=exact" in output
+    assert "#0 action=1" not in output
+    assert "#1 action=6(x=3,y=7)" in output
+    assert "#2 action=1" not in output
+
+
+def test_history_filters_model_mismatches(tmp_path: Path) -> None:
+    reader = TimelineHistoryReader(populated_timeline(tmp_path / "timeline.jsonl"))
+
+    output = asyncio.run(
+        reader.read(
+            HistoryQuery(detail="brief", prediction_status="mismatch")
+        )
+    )
+
+    assert "showing filtered most-recent 1 -> 1 steps" in output
+    assert "filters: prediction_status=mismatch" in output
+    assert "#0 action=1" in output
+    assert "#1 action=6" not in output
+
+
+def test_history_filters_reset_and_death_facts(tmp_path: Path) -> None:
+    reset_timeline = JsonlTimeline.create(
+        tmp_path / "reset.jsonl", game_id="test-game"
+    )
+    reset_timeline.initialize(observation(0))
+    reset_timeline.append(
+        action=reset_action(),
+        after=observation(0),
+        model_revision="reset-revision",
+        prediction=None,
+    )
+    reset_output = asyncio.run(
+        TimelineHistoryReader(reset_timeline).read(
+            HistoryQuery(detail="brief", flags="reset")
+        )
+    )
+
+    dead_timeline = JsonlTimeline.create(
+        tmp_path / "dead.jsonl", game_id="test-game"
+    )
+    dead_timeline.initialize(observation(0))
+    dead_timeline.append(
+        action=simple_action(),
+        after=observation(9, state=GameState.GAME_OVER),
+        model_revision="dead-revision",
+        prediction=None,
+    )
+    dead_output = asyncio.run(
+        TimelineHistoryReader(dead_timeline).read(
+            HistoryQuery(detail="brief", flags="dead")
+        )
+    )
+
+    assert "filters: flags=reset" in reset_output
+    assert "#0 action=0" in reset_output
+    assert "filters: flags=dead" in dead_output
+    assert "flags=['dead']" in dead_output
+
+
+def test_empty_filtered_history_echoes_the_selection(tmp_path: Path) -> None:
+    reader = TimelineHistoryReader(populated_timeline(tmp_path / "timeline.jsonl"))
+
+    output = asyncio.run(
+        reader.read(HistoryQuery(detail="brief", action=7))
+    )
+
+    assert "showing filtered most-recent 0 -> 0 steps" in output
+    assert "filters: action=7" in output
+    assert output.endswith("No transitions selected.")
+
+
+def test_history_query_rejects_ambiguous_or_invalid_selectors() -> None:
+    with pytest.raises(ValidationError, match="indices cannot be combined"):
+        HistoryQuery(indices=(0,), start=0, end=1)
+    with pytest.raises(ValidationError, match="start and end must be provided together"):
+        HistoryQuery(start=0)
+    with pytest.raises(ValidationError, match="end must be greater than or equal to start"):
+        HistoryQuery(start=2, end=1)
+
+
+def test_history_fails_hard_for_an_out_of_range_exact_index(
+    tmp_path: Path,
+) -> None:
+    reader = TimelineHistoryReader(populated_timeline(tmp_path / "timeline.jsonl"))
+
+    with pytest.raises(ValueError, match="history index 3 is out of range"):
+        asyncio.run(reader.read(HistoryQuery(indices=(3,))))
+
+
+def test_structural_change_summary_reports_components_colors_and_edges() -> None:
+    before = (
+        (0, 0, 0, 0, 0),
+        (0, 0, 0, 0, 0),
+        (0, 0, 0, 0, 0),
+        (0, 0, 0, 0, 0),
+        (0, 0, 0, 0, 0),
+    )
+    after = (
+        (0, 0, 0, 0, 0),
+        (0, 2, 2, 0, 0),
+        (0, 0, 0, 0, 0),
+        (0, 0, 0, 0, 0),
+        (0, 0, 0, 0, 3),
+    )
+
+    summary = summarize_grid_change(before, after)
+
+    assert summary.changed_cells == 3
+    assert summary.component_count == 2
+    assert [item.model_dump() for item in summary.components] == [
+        {
+            "cells": 2,
+            "top": 1,
+            "left": 1,
+            "bottom": 1,
+            "right": 2,
+            "touches_edge": False,
+        },
+        {
+            "cells": 1,
+            "top": 4,
+            "left": 4,
+            "bottom": 4,
+            "right": 4,
+            "touches_edge": True,
+        },
+    ]
+    assert [item.model_dump() for item in summary.color_transitions] == [
+        {"before": 0, "after": 2, "cells": 2},
+        {"before": 0, "after": 3, "cells": 1},
+    ]
+    assert [item.model_dump() for item in summary.color_count_changes] == [
+        {"color": 0, "before": 25, "after": 22, "delta": -3},
+        {"color": 2, "before": 0, "after": 2, "delta": 2},
+        {"color": 3, "before": 0, "after": 1, "delta": 1},
+    ]
+    assert summary.edge_changed_cells == 1
+    assert summary.peripheral_band_width == 1
+    assert summary.peripheral_changed_cells == 1
+    assert summary.interior_changed_cells == 2
+
+
+def test_brief_history_includes_structural_and_level_entry_distance(
+    tmp_path: Path,
+) -> None:
+    reader = TimelineHistoryReader(populated_timeline(tmp_path / "timeline.jsonl"))
+
+    output = asyncio.run(
+        reader.read(HistoryQuery(detail="brief", indices=(1,)))
+    )
+
+    assert "structure: cells=1 components=1" in output
+    assert "bboxes=[(0,0)-(0,0):1:edge]" in output
+    assert "colors=[1->3:1]" in output
+    assert "color_counts=[1:1->0(-1), 3:0->1(+1)]" in output
+    assert "edge_changed=1" in output
+    assert "peripheral_band=1 peripheral_changed=1 interior_changed=0" in output
+    assert "after_vs_level_entry=0 cells" in output
+    assert "prior_same_action=[]" in output
+
+
+def test_history_points_to_prior_transitions_with_the_same_action(
+    tmp_path: Path,
+) -> None:
+    reader = TimelineHistoryReader(populated_timeline(tmp_path / "timeline.jsonl"))
+
+    output = asyncio.run(
+        reader.read(HistoryQuery(detail="brief", indices=(2,)))
+    )
+
+    assert "prior_same_action=[#0]" in output

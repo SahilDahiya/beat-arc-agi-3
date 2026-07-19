@@ -240,6 +240,16 @@ def test_agent_reads_history_then_returns_typed_commit() -> None:
             tool.name: tool.parameters_json_schema
             for tool in info.function_tools
         }
+        assert set(schemas["read_history"]["properties"]) == {
+            "detail",
+            "limit",
+            "indices",
+            "start",
+            "end",
+            "action",
+            "flags",
+            "prediction_status",
+        }
         assert set(schemas["write_file"]["properties"]) == {
             "path",
             "content",
@@ -260,7 +270,14 @@ def test_agent_reads_history_then_returns_typed_commit() -> None:
             return ModelResponse(
                 parts=[
                     ToolCallPart(
-                        "read_history", {"detail": "brief", "limit": 3}
+                        "read_history",
+                        {
+                            "detail": "brief",
+                            "indices": [0, -1],
+                            "action": 6,
+                            "flags": "level_up",
+                            "prediction_status": "exact",
+                        },
                     )
                 ]
             )
@@ -281,7 +298,15 @@ def test_agent_reads_history_then_returns_typed_commit() -> None:
 
     assert isinstance(result, CommitActions)
     assert result.actions[0].action == "ACTION1"
-    assert history.calls == [HistoryQuery(detail="brief", limit=3)]
+    assert history.calls == [
+        HistoryQuery(
+            detail="brief",
+            indices=(0, -1),
+            action=6,
+            flags="level_up",
+            prediction_status="exact",
+        )
+    ]
     assert deps.synthesis.preflight_calls == [("ACTION1",)]
     assert len(conversation.messages()) == 5
     assert [event.type for _, event in events.recorded] == [

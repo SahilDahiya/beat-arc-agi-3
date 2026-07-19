@@ -4,6 +4,10 @@ from collections import Counter
 from arcengine import GameAction
 
 from beat_arc_agi_3.dependencies import HistoryDetail, HistoryQuery
+from beat_arc_agi_3.grid_analysis import (
+    render_grid_change_summary,
+    summarize_grid_change,
+)
 from beat_arc_agi_3.schemas import GameObservation
 from beat_arc_agi_3.timeline import JsonlTimeline, Transition
 
@@ -19,19 +23,151 @@ class TimelineHistoryReader:
 
     def _read_sync(self, query: HistoryQuery) -> str:
         transitions = self.timeline.transitions()
-        selected = transitions[-query.limit :]
-        lines = [self._summary(transitions)]
+        selected, selection_label = self._select(transitions, query)
+        lines = [
+            self._summary(transitions),
+            f"{selection_label}; detail={query.detail}:",
+        ]
+        filters = self._render_filters(query)
+        if filters:
+            lines.append(f"filters: {filters}")
         if not selected:
             lines.append("No transitions selected.")
             return "\n".join(lines)
 
-        lines.append(
-            f"showing most-recent {len(selected)} -> {len(selected)} steps; "
-            f"detail={query.detail}:"
-        )
+        entry_grids = self._entry_grids(transitions)
+        prior_same_actions = self._prior_same_actions(transitions)
         for transition in selected:
-            lines.extend(self._render_transition(transition, query.detail))
+            lines.extend(
+                self._render_transition(
+                    transition,
+                    query.detail,
+                    entry_grid=entry_grids[transition.after.levels_completed],
+                    prior_same_action=prior_same_actions[transition.index],
+                )
+            )
         return "\n".join(lines)
+
+    @classmethod
+    def _select(
+        cls,
+        transitions: tuple[Transition, ...],
+        query: HistoryQuery,
+    ) -> tuple[tuple[Transition, ...], str]:
+        if query.indices is not None:
+            selected = tuple(
+                transitions[cls._resolve_index(index, len(transitions))]
+                for index in query.indices
+            )
+            label = f"showing indices {list(query.indices)}"
+            explicit_selector = True
+        elif query.start is not None and query.end is not None:
+            if query.end >= len(transitions):
+                raise ValueError(
+                    f"history range end {query.end} is out of range for "
+                    f"{len(transitions)} transitions"
+                )
+            selected = transitions[query.start : query.end + 1]
+            label = f"showing range #{query.start}..#{query.end}"
+            explicit_selector = True
+        else:
+            selected = transitions
+            label = (
+                "showing filtered most-recent"
+                if cls._has_filters(query)
+                else "showing most-recent"
+            )
+            explicit_selector = False
+
+        selected = tuple(
+            transition
+            for transition in selected
+            if cls._matches(transition, query)
+        )
+        limit = query.limit
+        if limit is None and query.indices is None and query.start is None:
+            limit = 20
+        if limit is not None:
+            selected = selected[-limit:]
+        if explicit_selector:
+            return selected, f"{label} -> {len(selected)} steps"
+        return selected, f"{label} {len(selected)} -> {len(selected)} steps"
+
+    @staticmethod
+    def _resolve_index(index: int, count: int) -> int:
+        resolved = count + index if index < 0 else index
+        if resolved < 0 or resolved >= count:
+            raise ValueError(
+                f"history index {index} is out of range for {count} transitions"
+            )
+        return resolved
+
+    @staticmethod
+    def _has_filters(query: HistoryQuery) -> bool:
+        return any(
+            value is not None
+            for value in (query.action, query.flags, query.prediction_status)
+        )
+
+    @staticmethod
+    def _matches(transition: Transition, query: HistoryQuery) -> bool:
+        action = GameAction.from_name(transition.action.action).value
+        if query.action is not None and action != query.action:
+            return False
+        if (
+            query.prediction_status is not None
+            and transition.prediction_status != query.prediction_status
+        ):
+            return False
+        if query.flags is None:
+            return True
+        return {
+            "level_up": transition.level_up,
+            "dead": transition.dead,
+            "win": transition.win,
+            "reset": action == 0,
+            "mismatch": transition.prediction_status == "mismatch",
+        }[query.flags]
+
+    @staticmethod
+    def _render_filters(query: HistoryQuery) -> str:
+        return " ".join(
+            item
+            for item in (
+                f"action={query.action}" if query.action is not None else "",
+                f"flags={query.flags}" if query.flags is not None else "",
+                (
+                    f"prediction_status={query.prediction_status}"
+                    if query.prediction_status is not None
+                    else ""
+                ),
+            )
+            if item
+        )
+
+    def _entry_grids(
+        self, transitions: tuple[Transition, ...]
+    ) -> dict[int, tuple[tuple[int, ...], ...]]:
+        initial = self.timeline.initial_observation
+        assert initial is not None
+        entries = {initial.levels_completed: initial.grid}
+        for transition in transitions:
+            if transition.level_up:
+                entries[transition.after.levels_completed] = transition.after.grid
+        return entries
+
+    @staticmethod
+    def _prior_same_actions(
+        transitions: tuple[Transition, ...],
+    ) -> dict[int, tuple[int, ...]]:
+        prior_by_action: dict[int, list[int]] = {}
+        result: dict[int, tuple[int, ...]] = {}
+        for transition in transitions:
+            action = GameAction.from_name(transition.action.action).value
+            prior = prior_by_action.setdefault(action, [])
+            result[transition.index] = tuple(prior[-3:])
+            prior.append(transition.index)
+        return result
 
     @staticmethod
     def _summary(transitions: tuple[Transition, ...]) -> str:
@@ -68,9 +204,31 @@ class TimelineHistoryReader:
         )
 
     def _render_transition(
-        self, transition: Transition, detail: HistoryDetail
+        self,
+        transition: Transition,
+        detail: HistoryDetail,
+        *,
+        entry_grid: tuple[tuple[int, ...], ...],
+        prior_same_action: tuple[int, ...],
     ) -> list[str]:
-        lines = [self._brief_line(transition)]
+        transition_summary = summarize_grid_change(
+            transition.before.grid,
+            transition.after.grid,
+        )
+        entry_distance = summarize_grid_change(
+            entry_grid,
+            transition.after.grid,
+            component_limit=0,
+        ).changed_cells
+        lines = [
+            self._brief_line(transition),
+            "  structure: "
+            f"{render_grid_change_summary(transition_summary)}; "
+            f"after_vs_level_entry={entry_distance} cells; "
+            "prior_same_action=["
+            + ", ".join(f"#{index}" for index in prior_same_action)
+            + "]",
+        ]
         if detail == "full":
             lines.extend(
                 [

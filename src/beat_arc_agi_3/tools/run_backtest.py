@@ -1,5 +1,6 @@
 from pydantic import BaseModel, ConfigDict, Field
 
+from beat_arc_agi_3.grid_analysis import render_grid_change_summary
 from beat_arc_agi_3.synthesis import BacktestReport, SynthesisHarness
 
 
@@ -41,6 +42,10 @@ def render_backtest_report(report: BacktestReport) -> str:
         f"differing_cells={mismatch.differing_cells}",
         "predicted flags=" + mismatch.predicted_flags.model_dump_json(),
         "actual flags=" + mismatch.actual_flags.model_dump_json(),
+        "prediction-vs-actual structure: "
+        + render_grid_change_summary(mismatch.difference_summary),
+        "observed before-vs-after structure: "
+        + render_grid_change_summary(mismatch.actual_transition_summary),
     ]
     if mismatch.differences:
         lines.append("first cell differences:")
