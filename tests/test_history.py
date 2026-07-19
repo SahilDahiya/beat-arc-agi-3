@@ -131,7 +131,7 @@ def test_empty_history_is_explicit(tmp_path: Path) -> None:
     assert output.endswith("No transitions selected.")
 
 
-def test_history_labels_an_unchecked_probe_without_a_prediction(
+def test_history_labels_an_unchecked_action_without_a_prediction(
     tmp_path: Path,
 ) -> None:
     timeline = JsonlTimeline.create(
@@ -142,7 +142,7 @@ def test_history_labels_an_unchecked_probe_without_a_prediction(
     timeline.append(
         action=simple_action(),
         after=observation(7),
-        model_revision="probe-revision",
+        model_revision="unchecked-revision",
         prediction=None,
     )
 
@@ -151,4 +151,4 @@ def test_history_labels_an_unchecked_probe_without_a_prediction(
     )
 
     assert "model_mismatches=0 unchecked=1" in output
-    assert "model=unchecked revision=probe-revis" in output
+    assert "model=unchecked revision=unchecked-re" in output

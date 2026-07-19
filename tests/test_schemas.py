@@ -70,29 +70,17 @@ def test_action_coordinates_stay_inside_the_arc_grid() -> None:
 def test_commit_requires_at_least_one_action() -> None:
     with pytest.raises(ValidationError):
         CommitActions(
-            kind="plan",
             actions=[],
             reason="No action selected.",
             suggestion="Continue reasoning.",
         )
 
 
-def test_probe_commit_requires_exactly_one_action() -> None:
-    with pytest.raises(ValidationError, match="probe commits require exactly one"):
-        CommitActions(
-            kind="probe",
-            actions=[ArcAction(action="ACTION1"), ArcAction(action="ACTION2")],
-            reason="Test one uncertain interaction.",
-            suggestion="Inspect the result.",
-        )
-
-
-def test_plan_commit_accepts_a_multi_action_queue() -> None:
+def test_commit_accepts_a_multi_action_experimental_queue() -> None:
     commit = CommitActions(
-        kind="plan",
         actions=[ArcAction(action="ACTION1"), ArcAction(action="ACTION2")],
-        reason="Execute a certified route.",
-        suggestion="Inspect the destination.",
+        reason="Follow the known route, then test the uncertain interaction.",
+        suggestion="Inspect the frontier action if prediction disagrees.",
     )
 
-    assert commit.kind == "plan"
+    assert [action.action for action in commit.actions] == ["ACTION1", "ACTION2"]

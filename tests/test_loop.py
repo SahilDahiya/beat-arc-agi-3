@@ -64,11 +64,8 @@ class InterruptingEnvironment(FakeEnvironment):
         raise KeyboardInterrupt
 
 
-def commit(
-    actions: list[dict[str, object]], *, kind: str = "plan"
-) -> dict[str, object]:
+def commit(actions: list[dict[str, object]]) -> dict[str, object]:
     return {
-        "kind": kind,
         "actions": actions,
         "reason": "Execute the shortest supported plan.",
         "suggestion": "Inspect the resulting transition.",
@@ -380,7 +377,7 @@ def test_loop_cancels_queue_suffix_after_model_misprediction(
     )
 
 
-def test_loop_records_an_untrusted_one_action_probe_as_unchecked(
+def test_loop_records_an_untrusted_one_action_queue_as_unchecked(
     tmp_path: Path,
 ) -> None:
     environment = FakeEnvironment([frame(9)])
@@ -390,7 +387,7 @@ def test_loop_records_an_untrusted_one_action_probe_as_unchecked(
             parts=[
                 ToolCallPart(
                     "commit_actions",
-                    commit([{"action": "ACTION1"}], kind="probe"),
+                    commit([{"action": "ACTION1"}]),
                 )
             ]
         )

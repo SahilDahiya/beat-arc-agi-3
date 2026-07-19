@@ -85,7 +85,7 @@ def test_timeline_records_exact_and_mismatched_model_predictions(
     assert reopened.transitions()[1].model_revision == "abc123"
 
 
-def test_timeline_records_an_explicitly_unchecked_probe(tmp_path: Path) -> None:
+def test_timeline_records_an_explicitly_unchecked_action(tmp_path: Path) -> None:
     timeline = JsonlTimeline.create(
         tmp_path / "timeline.jsonl",
         game_id="test-game",

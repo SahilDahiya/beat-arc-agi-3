@@ -23,13 +23,13 @@ The implemented foundation now provides:
 15. Give each Schema file tool a separate implementation and expose trace-derived `write_file(path, content)` plus exact `edit_file(path, old_string, new_string, replace_all=false)` with atomic persistence.
 16. Require `world_model_v5.py` to implement the canonical stateful `init_state`, `predict`, and `is_goal` interfaces; invalid revisions never replace the live model.
 17. Execute generated world-model code and ad hoc Python in a read-only, networkless Session sandbox with hard timeouts.
-18. Expose trace-derived `run_backtest`, replay the complete Timeline, and require the exact current model revision and Timeline prefix to be green before accepting a certified plan.
-19. Distinguish certified multi-action plans from exactly one exploratory probe. Record revision-bound predictions for certified actions, preserve an untrusted probe as explicitly unchecked evidence, and cancel a certified queue at the first model mismatch.
+18. Expose trace-derived `run_backtest`, replay the complete Timeline, and require the exact current model revision and Timeline prefix to be green before accepting a multi-action queue.
+19. Use one prediction-guarded queue contract for planning and experimentation. A green model may carry a known prefix to an uncertain frontier action; an untrusted installed model permits exactly one unchecked action. Record revision-bound predictions when available and cancel the remaining queue at the first model mismatch.
 20. Expose trace-derived `run_python` for bounded analysis and `run_bfs` for revision-bound model-space planning.
 21. Persist a strict append-only `events.jsonl` journal with contiguous sequence numbers for session, turn, deliberation, tool, commit, action, mismatch, queue, and terminal run lifecycle evidence.
 22. Derive compact experiment evidence from the Timeline before every deliberation: online prediction accuracy, recent mismatches and actions, actions without level progress, exact observable-state revisits, short cycles, nearest recent visual distance, and the latest counterexample.
 23. Own ChatGPT subscription PKCE login, private credential persistence, and access-token refresh inside the harness, with explicit `openai-codex:` model selection and no API-key or subprocess fallback.
-24. Seed every Session with canonical `notes.md`, inject its current contents into every deliberation, and direct the agent to maintain it as a pruned scientific scratchpad separating facts from hypotheses.
+24. Seed every Session with canonical `notes.md`, include it once in the initial deliberation, retain its tool-mediated edits in conversation history, and direct the agent to maintain it as a pruned scientific scratchpad separating facts from hypotheses.
 25. Atomically preserve the exact `world_model_v5.py` revision at every observed level completion in an immutable, journaled `snapshots/cleared_level_N.py` artifact.
 
 JSON-over-stdio transport and human-readable event projections remain the next layer over this journal. Competition submission integration, score reconstruction, candidate-model archives, and explicit process resume remain later milestones. The current loop deliberately requires a new empty Session.

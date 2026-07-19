@@ -174,8 +174,9 @@ def render_experiment_context(timeline: JsonlTimeline) -> str:
             "unsupported repeated route and test a competing explanation."
         )
     lines.append(
-        "- If no evidence-backed goal-reaching plan exists, commit the "
-        "smallest discriminating experiment and state what its outcome will "
-        "confirm or falsify."
+        "- If no evidence-backed goal-reaching plan exists, use a known-safe "
+        "modeled prefix to reach the smallest discriminating experiment, put "
+        "the uncertain action last, and state what its outcome will confirm "
+        "or falsify."
     )
     return "\n".join(lines)

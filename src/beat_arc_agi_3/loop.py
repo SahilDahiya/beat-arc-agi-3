@@ -181,13 +181,10 @@ async def run_agent_loop(
 
                 pending_prediction = None
                 model_revision = session.synthesis.model_revision()
-                if commit.kind == "plan":
+                try:
                     pending_prediction = session.synthesis.predict_action(action)
-                else:
-                    try:
-                        pending_prediction = session.synthesis.predict_action(action)
-                    except BacktestRequiredError:
-                        pass
+                except BacktestRequiredError:
+                    pass
                 if pending_prediction is not None:
                     model_revision = pending_prediction.revision
                 transition_index = len(session.timeline.transitions())

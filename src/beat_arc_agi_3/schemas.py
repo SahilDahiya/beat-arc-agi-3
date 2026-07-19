@@ -95,17 +95,10 @@ class ArcAction(BaseModel):
 
 
 class CommitActions(BaseModel):
-    """A queue that ends deliberation and hands intent to the next turn."""
+    """A prediction-guarded queue that hands intent to the next turn."""
 
     model_config = ConfigDict(frozen=True)
 
-    kind: Literal["plan", "probe"]
     actions: tuple[ArcAction, ...] = Field(min_length=1)
     reason: str = Field(min_length=1)
     suggestion: str = Field(min_length=1)
-
-    @model_validator(mode="after")
-    def validate_commit_kind(self) -> Self:
-        if self.kind == "probe" and len(self.actions) != 1:
-            raise ValueError("probe commits require exactly one action")
-        return self

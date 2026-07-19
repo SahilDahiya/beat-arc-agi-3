@@ -66,7 +66,8 @@ def test_experiment_context_exposes_counterexample_and_observable_cycle(
     assert "observable-state cycle length=2" in context
     assert "transition #1 is the latest counterexample" in context
     assert "Do not patch by transition index or action occurrence count" in context
-    assert "commit the smallest discriminating experiment" in context
+    assert "use a known-safe modeled prefix" in context
+    assert "put the uncertain action last" in context
 
 
 def test_experiment_context_resets_stagnation_after_level_progress(
@@ -98,7 +99,7 @@ def test_experiment_context_resets_stagnation_after_level_progress(
     assert "observable-state cycle" not in context
 
 
-def test_unchecked_probe_is_not_counted_as_a_failed_model_prediction(
+def test_unchecked_action_is_not_counted_as_a_failed_model_prediction(
     tmp_path: Path,
 ) -> None:
     timeline = JsonlTimeline.create(

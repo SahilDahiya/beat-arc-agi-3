@@ -57,12 +57,13 @@ async def deliberate(
     prompt_parts = ["Choose the next action queue for this observation."]
     if turn_context:
         prompt_parts.append(turn_context)
-    prompt_parts.extend(
-        [
-            "Your notes (notes.md; maintain and prune this every turn):",
-            deps.workspace.read_text("notes.md"),
-        ]
-    )
+    if not conversation.messages():
+        prompt_parts.extend(
+            [
+                "Your notes (notes.md; initial session checkpoint):",
+                deps.workspace.read_text("notes.md"),
+            ]
+        )
     prompt_parts.append(render_observation(observation))
     deps.events.append(
         turn=deps.turn,
@@ -89,7 +90,6 @@ async def deliberate(
         turn=deps.turn,
         event=CommitAcceptedEvent(
             summary=f"Accepted {len(result.output.actions)} action(s): {action_names}",
-            kind=result.output.kind,
             actions=result.output.actions,
             reason=result.output.reason,
             suggestion=result.output.suggestion,

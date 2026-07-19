@@ -132,18 +132,17 @@ persistent HUD, status, inventory, or progress indicators and encode that
 separation in the model when the evidence supports it.
 Use run_bfs only on that green revision when model-space search is useful; its
 returned plan is valid only for the revision named in the result.
-When ready, call commit_actions with kind, a non-empty ordered queue, the reason
-for the queue, and a suggestion for the next deliberation turn. Use kind=plan
-for a certified queue; plans require a green current revision. Use kind=probe
-only for one discriminating action when no evidence-backed goal-reaching plan
-exists. A probe may proceed unchecked when the installed model cannot yet
-become green from existing evidence. State the probe's expected observation
-and falsifier in reason. Only commit actions
-listed as legal in the current observation. ACTION6 is a click and requires x/y
-coordinates; parameterless actions reject coordinates. A commit ends this turn,
-so do not request more tools alongside it. If no evidence-backed goal-reaching
-plan exists, prefer the smallest experiment that distinguishes competing
-hypotheses; state its expected observation and falsifier in reason.
+When ready, call commit_actions with a non-empty ordered queue, the reason for
+the queue, and a suggestion for the next deliberation turn. A green current
+revision permits a prediction-guarded multi-action queue. Use known modeled
+behavior to reach an informative frontier efficiently, place the least certain
+action last, and let the harness discard the remaining suffix on the first
+prediction mismatch. If the installed model is not green, commit exactly one
+unchecked discriminating action and state its expected observation and
+falsifier in reason. Only commit actions listed as legal in the current
+observation. ACTION6 is a click and requires x/y coordinates; parameterless
+actions reject coordinates. A commit ends this turn, so do not request more
+tools alongside it.
 """.strip()
 
 
@@ -440,14 +439,21 @@ def build_agent(
                 f"Committed unavailable actions {unavailable}; "
                 f"legal actions are {sorted(legal)}"
             )
-        if output.kind == "probe":
-            try:
-                ctx.deps.synthesis.inspect_model()
-            except WorldModelError as exc:
-                raise ModelRetry(str(exc)) from exc
+        try:
+            ctx.deps.synthesis.inspect_model()
+        except WorldModelError as exc:
+            raise ModelRetry(str(exc)) from exc
+        try:
+            ctx.deps.synthesis.require_green()
+        except BacktestRequiredError as exc:
+            if len(output.actions) != 1:
+                raise ModelRetry(
+                    "The current world model is untrusted, so commit exactly "
+                    "one unchecked action or repair and backtest the model "
+                    f"before committing a queue: {exc}"
+                ) from exc
         else:
             try:
-                ctx.deps.synthesis.require_green()
                 ctx.deps.synthesis.preflight_actions(output.actions)
             except (BacktestRequiredError, WorldModelError) as exc:
                 raise ModelRetry(

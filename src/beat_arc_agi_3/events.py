@@ -92,7 +92,6 @@ class BacktestCompletedEvent(_Event):
 
 class CommitAcceptedEvent(_Event):
     type: Literal["commit_accepted"] = "commit_accepted"
-    kind: Literal["plan", "probe"]
     actions: tuple[ArcAction, ...] = Field(min_length=1)
     reason: str = Field(min_length=1)
     suggestion: str = Field(min_length=1)

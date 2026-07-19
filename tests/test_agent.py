@@ -30,6 +30,7 @@ from beat_arc_agi_3.synthesis import (
 from beat_arc_agi_3.tools.edit_file import EditFileQuery
 from beat_arc_agi_3.tools.read_file import ReadFileQuery
 from beat_arc_agi_3.tools.write_file import WriteFileQuery
+from beat_arc_agi_3.world_model import WorldModelError
 
 
 models.ALLOW_MODEL_REQUESTS = False
@@ -77,12 +78,15 @@ class RecordingWorkspace:
 @dataclass
 class RecordingSynthesis:
     green: bool = True
+    model_installed: bool = True
     backtest_calls: list[int] = field(default_factory=list)
     preflight_calls: list[tuple[str, ...]] = field(default_factory=list)
     inspect_calls: int = 0
 
     def inspect_model(self) -> str:
         self.inspect_calls += 1
+        if not self.model_installed:
+            raise WorldModelError("world_model_v5.py does not exist")
         return "test-revision"
 
     def model_revision(self) -> str:
@@ -168,17 +172,14 @@ def observation(*available_actions: int) -> GameObservation:
     )
 
 
-def commit_args(
-    action: str = "ACTION1", *, kind: str = "plan"
-) -> dict[str, object]:
+def commit_args(action: str = "ACTION1") -> dict[str, object]:
     return {
-        "kind": kind,
         "actions": [
             {
                 "action": action,
             }
         ],
-        "reason": "Take the best supported probe.",
+        "reason": "Take the best supported action.",
         "suggestion": "Inspect the resulting transition next turn.",
     }
 
@@ -250,6 +251,11 @@ def test_agent_reads_history_then_returns_typed_commit() -> None:
             "replace_all",
         }
         assert [tool.name for tool in info.output_tools] == ["commit_actions"]
+        assert set(info.output_tools[0].parameters_json_schema["properties"]) == {
+            "actions",
+            "reason",
+            "suggestion",
+        }
         if len(messages) == 1:
             return ModelResponse(
                 parts=[
@@ -383,9 +389,9 @@ def test_agent_retries_a_commit_with_an_unavailable_action() -> None:
     assert result.actions[0].action == "ACTION1"
 
 
-def test_agent_must_create_and_backtest_world_model_before_committing() -> None:
+def test_agent_must_create_world_model_before_committing() -> None:
     workspace = RecordingWorkspace(existing_files=set())
-    synthesis = RecordingSynthesis(green=False)
+    synthesis = RecordingSynthesis(green=False, model_installed=False)
     model_calls = 0
 
     def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -396,6 +402,7 @@ def test_agent_must_create_and_backtest_world_model_before_committing() -> None:
                 parts=[ToolCallPart("commit_actions", commit_args())]
             )
         if model_calls == 2:
+            synthesis.model_installed = True
             return ModelResponse(
                 parts=[
                     ToolCallPart(
@@ -406,10 +413,6 @@ def test_agent_must_create_and_backtest_world_model_before_committing() -> None:
                         },
                     )
                 ]
-            )
-        if model_calls == 3:
-            return ModelResponse(
-                parts=[ToolCallPart("run_backtest", {"max_details": 2})]
             )
         return ModelResponse(parts=[ToolCallPart("commit_actions", commit_args())])
 
@@ -427,7 +430,7 @@ def test_agent_must_create_and_backtest_world_model_before_committing() -> None:
         )
     )
 
-    assert model_calls == 4
+    assert model_calls == 3
     assert result.actions[0].action == "ACTION1"
     assert workspace.write_calls == [
         WriteFileQuery(
@@ -435,10 +438,10 @@ def test_agent_must_create_and_backtest_world_model_before_committing() -> None:
             content="def predict(state, action):\n    return state\n",
         )
     ]
-    assert synthesis.backtest_calls == [2]
+    assert synthesis.backtest_calls == []
 
 
-def test_agent_accepts_one_probe_with_an_installed_untrusted_model() -> None:
+def test_agent_accepts_one_unchecked_action_with_an_installed_untrusted_model() -> None:
     synthesis = RecordingSynthesis(green=False)
 
     def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -446,7 +449,7 @@ def test_agent_accepts_one_probe_with_an_installed_untrusted_model() -> None:
             parts=[
                 ToolCallPart(
                     "commit_actions",
-                    commit_args(kind="probe"),
+                    commit_args(),
                 )
             ]
         )
@@ -466,8 +469,54 @@ def test_agent_accepts_one_probe_with_an_installed_untrusted_model() -> None:
         )
     )
 
-    assert result.kind == "probe"
+    assert len(result.actions) == 1
     assert synthesis.inspect_calls == 1
+    assert synthesis.preflight_calls == []
+
+
+def test_agent_retries_an_untrusted_multi_action_queue_as_one_action() -> None:
+    synthesis = RecordingSynthesis(green=False)
+    attempts = 0
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        nonlocal attempts
+        attempts += 1
+        actions = (
+            [{"action": "ACTION1"}, {"action": "ACTION1"}]
+            if attempts == 1
+            else [{"action": "ACTION1"}]
+        )
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    "commit_actions",
+                    {
+                        "actions": actions,
+                        "reason": "Reach and test the uncertain frontier.",
+                        "suggestion": "Inspect the resulting transition.",
+                    },
+                )
+            ]
+        )
+
+    deps = AgentDeps(
+        observation=observation(1),
+        history=RecordingHistory(),
+        workspace=RecordingWorkspace(),
+        synthesis=synthesis,
+        events=RecordingEvents(),
+        turn=1,
+    )
+
+    result = asyncio.run(
+        deliberate(
+            build_agent(FunctionModel(model)), deps, MemoryConversation()
+        )
+    )
+
+    assert attempts == 2
+    assert len(result.actions) == 1
+    assert synthesis.inspect_calls == 2
     assert synthesis.preflight_calls == []
 
 
@@ -496,7 +545,7 @@ def test_deliberation_reuses_session_message_history() -> None:
     assert len(conversation.messages()) == 6
 
 
-def test_deliberation_injects_current_notes_every_turn() -> None:
+def test_deliberation_seeds_notes_once_and_reuses_conversation_history() -> None:
     prompts: list[str] = []
 
     def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -516,17 +565,17 @@ def test_deliberation_injects_current_notes_every_turn() -> None:
         turn=1,
     )
 
-    asyncio.run(
-        deliberate(
-            build_agent(FunctionModel(model)),
-            deps,
-            MemoryConversation(),
-        )
-    )
+    agent = build_agent(FunctionModel(model))
+    conversation = MemoryConversation()
 
-    assert len(prompts) == 1
-    assert "Your notes (notes.md; maintain and prune this every turn):" in prompts[0]
+    asyncio.run(deliberate(agent, deps, conversation))
+    asyncio.run(deliberate(agent, deps, conversation))
+
+    assert len(prompts) == 2
+    assert "Your notes (notes.md; initial session checkpoint):" in prompts[0]
     assert "## Confirmed mechanics\n- action 1 moves up" in prompts[0]
+    assert "Your notes (notes.md; initial session checkpoint):" not in prompts[1]
+    assert "## Confirmed mechanics\n- action 1 moves up" not in prompts[1]
 
 
 def test_agent_reads_a_workspace_file_then_commits() -> None:

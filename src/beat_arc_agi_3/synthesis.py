@@ -234,12 +234,16 @@ class SynthesisHarness:
 
     def preflight_actions(self, actions: tuple[ArcAction, ...]) -> None:
         trust = self.require_green()
+        state = trust.state
+        grid = trust.grid
         for action in actions:
-            self.runtime.predict(
-                state=trust.state,
-                grid=trust.grid,
+            prediction = self.runtime.predict(
+                state=state,
+                grid=grid,
                 action=action,
             )
+            state = prediction.state
+            grid = prediction.grid
 
     def run_bfs(
         self,

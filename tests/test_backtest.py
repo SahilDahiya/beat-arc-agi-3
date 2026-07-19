@@ -192,6 +192,38 @@ def test_exact_online_prediction_advances_green_trust(tmp_path: Path) -> None:
     assert harness.require_green().timeline_transitions == 1
 
 
+def test_multi_action_preflight_advances_modeled_state_between_actions(
+    tmp_path: Path,
+) -> None:
+    source = '''
+def init_state(entry_grid):
+    return {"steps": 0}
+
+
+def predict(state, grid, action, x=None, y=None):
+    if action == "ACTION2" and state["steps"] != 1:
+        raise ValueError("ACTION2 requires the modeled ACTION1 prefix")
+    return (
+        [[grid[0][0] + 1]],
+        {"level_up": False, "dead": False, "win": False},
+        {"steps": state["steps"] + 1},
+    )
+
+
+def is_goal(state, grid):
+    return False
+'''.lstrip()
+    harness = build_harness(tmp_path, [], source=source)
+    harness.run_backtest()
+
+    harness.preflight_actions(
+        (
+            ArcAction(action="ACTION1"),
+            ArcAction(action="ACTION2"),
+        )
+    )
+
+
 def test_online_misprediction_invalidates_green_trust(tmp_path: Path) -> None:
     harness = build_harness(tmp_path, [])
     harness.run_backtest()
