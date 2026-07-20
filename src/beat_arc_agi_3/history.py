@@ -12,6 +12,9 @@ from beat_arc_agi_3.schemas import GameObservation
 from beat_arc_agi_3.timeline import JsonlTimeline, Transition
 
 
+MAX_HISTORY_OUTPUT_CHARS = 50_000
+
+
 class TimelineHistoryReader:
     """Render validated timeline records for the agent's history tool."""
 
@@ -23,7 +26,10 @@ class TimelineHistoryReader:
 
     def _read_sync(self, query: HistoryQuery) -> str:
         transitions = self.timeline.transitions()
-        selected, selection_label = self._select(transitions, query)
+        selected, selection_label, explicit_selector = self._select(
+            transitions,
+            query,
+        )
         lines = [
             self._summary(transitions),
             f"{selection_label}; detail={query.detail}:",
@@ -37,23 +43,95 @@ class TimelineHistoryReader:
 
         entry_grids = self._entry_grids(transitions)
         prior_same_actions = self._prior_same_actions(transitions)
-        for transition in selected:
-            lines.extend(
-                self._render_transition(
-                    transition,
-                    query.detail,
-                    entry_grid=entry_grids[transition.after.levels_completed],
-                    prior_same_action=prior_same_actions[transition.index],
-                )
+        prefix = "\n".join(lines)
+        blocks = tuple(
+            (
+                transition.index,
+                "\n".join(
+                    self._render_transition(
+                        transition,
+                        query.detail,
+                        entry_grid=entry_grids[
+                            transition.after.levels_completed
+                        ],
+                        prior_same_action=prior_same_actions[transition.index],
+                    )
+                ),
             )
-        return "\n".join(lines)
+            for transition in selected
+        )
+        for index, block in blocks:
+            if len(f"{prefix}\n{block}") > MAX_HISTORY_OUTPUT_CHARS:
+                raise ValueError(
+                    f"history transition #{index} exceeds the "
+                    f"{MAX_HISTORY_OUTPUT_CHARS}-character output bound at "
+                    f"detail={query.detail}; request detail=brief or full"
+                )
+
+        complete = "\n".join([prefix, *(block for _, block in blocks)])
+        if len(complete) <= MAX_HISTORY_OUTPUT_CHARS:
+            return complete
+        if explicit_selector:
+            raise ValueError(
+                "explicit history selection exceeds the "
+                f"{MAX_HISTORY_OUTPUT_CHARS}-character output bound; request "
+                "fewer indices, a narrower range, or a less detailed view"
+            )
+
+        included: list[tuple[int, str]] = []
+        for position in range(len(blocks) - 1, -1, -1):
+            candidate = [blocks[position], *included]
+            omitted = blocks[:position]
+            output = self._render_capped_history(
+                prefix=prefix,
+                included=candidate,
+                omitted=omitted,
+                selected_count=len(blocks),
+            )
+            if len(output) > MAX_HISTORY_OUTPUT_CHARS:
+                break
+            included = candidate
+
+        if not included:
+            newest_index = blocks[-1][0]
+            raise ValueError(
+                f"history transition #{newest_index} exceeds the "
+                f"{MAX_HISTORY_OUTPUT_CHARS}-character output bound at "
+                f"detail={query.detail}; request detail=brief or full"
+            )
+        omitted = blocks[: len(blocks) - len(included)]
+        return self._render_capped_history(
+            prefix=prefix,
+            included=included,
+            omitted=omitted,
+            selected_count=len(blocks),
+        )
+
+    @staticmethod
+    def _render_capped_history(
+        *,
+        prefix: str,
+        included: list[tuple[int, str]],
+        omitted: tuple[tuple[int, str], ...],
+        selected_count: int,
+    ) -> str:
+        omitted_indices = ", ".join(f"#{index}" for index, _ in omitted)
+        notice = (
+            f"(capped at {MAX_HISTORY_OUTPUT_CHARS} characters; rendered "
+            f"{len(included)}/{selected_count} complete transitions; omitted "
+            f"older selected transitions: {omitted_indices}. To inspect them, "
+            "use an explicit narrower range or indices query to continue.)"
+        )
+        return "\n".join(
+            [prefix, *(block for _, block in included), "", notice]
+        )
 
     @classmethod
     def _select(
         cls,
         transitions: tuple[Transition, ...],
         query: HistoryQuery,
-    ) -> tuple[tuple[Transition, ...], str]:
+    ) -> tuple[tuple[Transition, ...], str, bool]:
         if query.indices is not None:
             selected = tuple(
                 transitions[cls._resolve_index(index, len(transitions))]
@@ -90,8 +168,12 @@ class TimelineHistoryReader:
         if limit is not None:
             selected = selected[-limit:]
         if explicit_selector:
-            return selected, f"{label} -> {len(selected)} steps"
-        return selected, f"{label} {len(selected)} -> {len(selected)} steps"
+            return selected, f"{label} -> {len(selected)} steps", True
+        return (
+            selected,
+            f"{label} {len(selected)} -> {len(selected)} steps",
+            False,
+        )
 
     @staticmethod
     def _resolve_index(index: int, count: int) -> int:

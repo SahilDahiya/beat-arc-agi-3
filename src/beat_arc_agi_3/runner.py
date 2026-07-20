@@ -21,6 +21,8 @@ class Conversation(Protocol):
 
     def messages(self) -> tuple[ModelMessage, ...]: ...
 
+    def context_messages(self) -> tuple[ModelMessage, ...]: ...
+
     def append(self, messages: Sequence[ModelMessage]) -> None: ...
 
 
@@ -59,10 +61,12 @@ async def deliberate(
     """Run and durably extend one session conversation before returning a queue."""
 
     observation = deps.observation
+    durable_messages = conversation.messages()
+    context_messages = conversation.context_messages()
     prompt_parts = ["Choose the next action queue for this observation."]
     if turn_context:
         prompt_parts.append(turn_context)
-    if not conversation.messages():
+    if not durable_messages:
         prompt_parts.extend(
             [
                 "Your notes (notes.md; initial session checkpoint):",
@@ -79,7 +83,7 @@ async def deliberate(
     result = await agent.run(
         "\n".join(prompt_parts),
         deps=deps,
-        message_history=conversation.messages(),
+        message_history=context_messages,
         usage_limits=NO_SDK_USAGE_LIMITS,
     )
     conversation.append(

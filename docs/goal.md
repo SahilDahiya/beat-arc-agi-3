@@ -38,6 +38,7 @@ The implemented foundation now provides:
 30. Record bounded BFS outcomes as typed canonical events and expose a deterministic per-level lifecycle report over action, prediction, synthesis, search, repair, queue, and terminal evidence.
 31. Separate full-prefix replay trust from active-revision online evidence on the current level in every deliberation context.
 32. Make synthesis mode explicit in the scientific scratchpad: use evidence-backed `goal_search` with an executable temporary predicate, or a bounded `discriminating_experiment` against a competing hypothesis.
+33. Separate complete durable Pydantic AI messages from an explicit provider-bound context projection, initially without compaction, and bound large file, history, and analytical Python returns before they enter replayed conversation history.
 
 JSON-over-stdio transport and human-readable event projections remain the next layer over this journal. Competition submission integration, score reconstruction, candidate-model archives, and explicit process resume remain later milestones. The current loop deliberately requires a new empty Session.
 

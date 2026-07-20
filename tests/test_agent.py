@@ -6,8 +6,10 @@ from arcengine import FrameData, GameState
 from pydantic import SecretStr
 from pydantic_ai import (
     ModelMessage,
+    ModelMessagesTypeAdapter,
     ModelRequest,
     ModelResponse,
+    TextPart,
     ToolCallPart,
     UserPromptPart,
     models,
@@ -166,9 +168,14 @@ class RecordingSynthesis:
 @dataclass
 class MemoryConversation:
     recorded: list[ModelMessage] = field(default_factory=list)
+    projected: list[ModelMessage] | None = None
 
     def messages(self) -> tuple[ModelMessage, ...]:
         return tuple(self.recorded)
+
+    def context_messages(self) -> tuple[ModelMessage, ...]:
+        source = self.recorded if self.projected is None else self.projected
+        return tuple(source)
 
     def append(self, messages: list[ModelMessage]) -> None:
         self.recorded.extend(messages)
@@ -730,6 +737,44 @@ def test_deliberation_reuses_session_message_history() -> None:
 
     assert message_counts == [1, 3]
     assert len(conversation.messages()) == 6
+
+
+def test_deliberation_sends_projected_context_without_changing_durable_history(
+) -> None:
+    durable_prompt = ModelRequest(parts=[UserPromptPart("durable-only prompt")])
+    durable_response = ModelResponse(parts=[TextPart("durable-only response")])
+    projected_prompt = ModelRequest(parts=[UserPromptPart("projected prompt")])
+    projected_response = ModelResponse(parts=[TextPart("projected response")])
+    received: list[ModelMessage] = []
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        received.extend(messages)
+        return ModelResponse(parts=[ToolCallPart("commit_actions", commit_args())])
+
+    deps = AgentDeps(
+        observation=observation(1),
+        history=RecordingHistory(),
+        workspace=RecordingWorkspace(),
+        synthesis=RecordingSynthesis(),
+        events=RecordingEvents(),
+        turn=2,
+    )
+    conversation = MemoryConversation(
+        recorded=[durable_prompt, durable_response],
+        projected=[projected_prompt, projected_response],
+    )
+
+    asyncio.run(
+        deliberate(build_agent(FunctionModel(model)), deps, conversation)
+    )
+
+    serialized = ModelMessagesTypeAdapter.dump_json(received).decode("utf-8")
+    assert "projected prompt" in serialized
+    assert "projected response" in serialized
+    assert "durable-only prompt" not in serialized
+    assert "durable-only response" not in serialized
+    assert "initial session checkpoint" not in serialized
+    assert conversation.messages()[:2] == (durable_prompt, durable_response)
 
 
 def test_deliberation_seeds_notes_once_and_reuses_conversation_history() -> None:

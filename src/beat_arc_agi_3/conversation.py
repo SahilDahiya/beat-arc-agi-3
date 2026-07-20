@@ -46,6 +46,11 @@ class JsonlConversation:
     def messages(self) -> tuple[ModelMessage, ...]:
         return tuple(self._messages)
 
+    def context_messages(self) -> tuple[ModelMessage, ...]:
+        """Project durable messages into the provider-bound context."""
+
+        return tuple(self._messages)
+
     def append(self, messages: Sequence[ModelMessage]) -> None:
         batch = self._deduplicate_instructions(messages)
         if not batch:

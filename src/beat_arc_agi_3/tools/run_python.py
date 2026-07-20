@@ -50,13 +50,15 @@ def execute_run_python(
             f"ERROR: Python timed out after {query.timeout_seconds}s."
         ) from exc
 
-    stdout = _cap(completed.stdout.rstrip())
-    stderr = _cap(completed.stderr.rstrip())
+    stdout = completed.stdout.rstrip()
+    stderr = completed.stderr.rstrip()
     if completed.returncode != 0:
         diagnostic = stderr or stdout or "(no diagnostic output)"
         raise RunPythonError(
-            f"ERROR: Python exited with status {completed.returncode}.\n"
-            f"{diagnostic}"
+            _cap(
+                f"ERROR: Python exited with status {completed.returncode}.\n"
+                f"{diagnostic}"
+            )
         )
 
     sections: list[str] = []
@@ -64,13 +66,18 @@ def execute_run_python(
         sections.append(f"STDOUT:\n{stdout}")
     if stderr:
         sections.append(f"STDERR:\n{stderr}")
-    return "\n".join(sections) if sections else "Python completed with no output."
+    output = "\n".join(sections) if sections else "Python completed with no output."
+    return _cap(output)
 
 
 def _cap(output: str) -> str:
     if len(output) <= MAX_RUN_PYTHON_OUTPUT:
         return output
-    return (
-        output[:MAX_RUN_PYTHON_OUTPUT]
-        + f"\n... output capped at {MAX_RUN_PYTHON_OUTPUT} characters"
+    marker = (
+        f"\n... output capped at {MAX_RUN_PYTHON_OUTPUT} characters; "
+        "middle omitted ...\n"
     )
+    content_budget = MAX_RUN_PYTHON_OUTPUT - len(marker)
+    head_chars = content_budget // 2
+    tail_chars = content_budget - head_chars
+    return output[:head_chars] + marker + output[-tail_chars:]

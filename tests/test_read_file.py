@@ -2,7 +2,11 @@ from pathlib import Path
 
 import pytest
 
-from beat_arc_agi_3.tools.read_file import ReadFileError, ReadFileQuery
+from beat_arc_agi_3.tools.read_file import (
+    MAX_READ_FILE_CHARS,
+    ReadFileError,
+    ReadFileQuery,
+)
 from beat_arc_agi_3.workspace import SessionWorkspace
 
 
@@ -56,13 +60,26 @@ def test_read_file_caps_large_output_at_a_line_boundary(
 
     body, continuation = output.rsplit("\n\n", 1)
     last_rendered_line = int(body.splitlines()[-1].split("\t", 1)[0])
-    assert len(body) <= 50_000
+    assert len(output) <= MAX_READ_FILE_CHARS
     assert continuation == (
         f"(capped — use offset={last_rendered_line + 1} to continue.)"
     )
     assert body.splitlines()[0] == (
         f"large.py (700 lines, showing 1-{last_rendered_line}):"
     )
+
+
+def test_read_file_rejects_a_single_line_larger_than_the_output_bound(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "one-line.txt").write_text(
+        "x" * (MAX_READ_FILE_CHARS + 1),
+        encoding="utf-8",
+    )
+    workspace = SessionWorkspace(tmp_path)
+
+    with pytest.raises(ReadFileError, match="line 1 exceeds the 50000-character"):
+        workspace.read_file(ReadFileQuery(path="one-line.txt"))
 
 
 def test_read_file_reports_a_missing_file(tmp_path: Path) -> None:

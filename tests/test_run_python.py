@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from beat_arc_agi_3.tools.run_python import (
+    MAX_RUN_PYTHON_OUTPUT,
     RunPythonError,
     RunPythonQuery,
     execute_run_python,
@@ -52,3 +53,47 @@ def test_run_python_times_out(tmp_path: Path) -> None:
                 timeout_seconds=1,
             ),
         )
+
+
+def test_run_python_shares_one_output_bound_across_stdout_and_stderr(
+    tmp_path: Path,
+) -> None:
+    workspace = SessionWorkspace(tmp_path)
+
+    output = execute_run_python(
+        workspace,
+        RunPythonQuery(
+            code=(
+                "import sys\n"
+                "print('o' * 30000)\n"
+                "print('e' * 30000, file=sys.stderr)\n"
+            )
+        ),
+    )
+
+    assert len(output) <= MAX_RUN_PYTHON_OUTPUT
+    assert "output capped at 50000 characters" in output
+    assert output.startswith("STDOUT:\n")
+    assert output.endswith("e" * 100)
+
+
+def test_run_python_bounds_failure_diagnostics(tmp_path: Path) -> None:
+    workspace = SessionWorkspace(tmp_path)
+
+    with pytest.raises(RunPythonError) as exc_info:
+        execute_run_python(
+            workspace,
+            RunPythonQuery(
+                code=(
+                    "import sys\n"
+                    "print('e' * 60000, file=sys.stderr)\n"
+                    "raise RuntimeError('boom')\n"
+                )
+            ),
+        )
+
+    message = str(exc_info.value)
+    assert len(message) <= MAX_RUN_PYTHON_OUTPUT
+    assert message.startswith("ERROR: Python exited with status 1.")
+    assert "output capped at 50000 characters" in message
+    assert message.endswith("RuntimeError: boom")

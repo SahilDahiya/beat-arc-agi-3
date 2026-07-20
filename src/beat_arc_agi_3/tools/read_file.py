@@ -79,13 +79,38 @@ def _render(
             ),
         )
         candidate_body = "\n".join([candidate_header, *candidate_lines])
-        if len(candidate_body) > MAX_READ_FILE_CHARS and numbered:
+        if len(candidate_body) > MAX_READ_FILE_CHARS:
+            if not numbered:
+                raise ReadFileError(
+                    f"ERROR: line {line_number} exceeds the "
+                    f"{MAX_READ_FILE_CHARS}-character read_file output bound."
+                )
             capped = True
             break
         numbered = candidate_lines
 
+    if capped:
+        while numbered:
+            end = offset + len(numbered) - 1
+            header = _header(
+                label=label,
+                total=total,
+                offset=offset,
+                end=end,
+                complete=False,
+            )
+            continuation = f"(capped — use offset={end + 1} to continue.)"
+            output = "\n".join([header, *numbered, "", continuation])
+            if len(output) <= MAX_READ_FILE_CHARS:
+                return output
+            numbered.pop()
+        raise ReadFileError(
+            f"ERROR: line {offset} exceeds the "
+            f"{MAX_READ_FILE_CHARS}-character read_file output bound."
+        )
+
     end = offset + len(numbered) - 1
-    complete = offset == 1 and end == total and not capped
+    complete = offset == 1 and end == total
     header = _header(
         label=label,
         total=total,
@@ -93,10 +118,7 @@ def _render(
         end=end,
         complete=complete,
     )
-    body = "\n".join([header, *numbered])
-    if capped:
-        return f"{body}\n\n(capped — use offset={end + 1} to continue.)"
-    return body
+    return "\n".join([header, *numbered])
 
 
 def _header(

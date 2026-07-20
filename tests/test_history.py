@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from beat_arc_agi_3.dependencies import HistoryQuery
 from beat_arc_agi_3.grid_analysis import summarize_grid_change
-from beat_arc_agi_3.history import TimelineHistoryReader
+from beat_arc_agi_3.history import MAX_HISTORY_OUTPUT_CHARS, TimelineHistoryReader
 from beat_arc_agi_3.schemas import ArcAction, GameObservation
 from beat_arc_agi_3.timeline import JsonlTimeline, ModelPredictionRecord
 
@@ -83,6 +83,36 @@ def populated_timeline(path: Path) -> JsonlTimeline:
     return timeline
 
 
+def large_observation(
+    value: int,
+    *,
+    ticks: tuple[tuple[tuple[int, ...], ...], ...] = (),
+) -> GameObservation:
+    grid = tuple(tuple(value for _ in range(64)) for _ in range(64))
+    return GameObservation(
+        game_id="test-game",
+        grid=grid,
+        ticks=ticks,
+        state=GameState.NOT_FINISHED,
+        levels_completed=0,
+        win_levels=2,
+        available_actions=(1, 6),
+    )
+
+
+def large_timeline(path: Path, *, transitions: int = 8) -> JsonlTimeline:
+    timeline = JsonlTimeline.create(path, game_id="test-game")
+    timeline.initialize(large_observation(0))
+    for index in range(transitions):
+        timeline.append(
+            action=simple_action(),
+            after=large_observation((index + 1) % 16),
+            model_revision="large-revision",
+            prediction=None,
+        )
+    return timeline
+
+
 def test_brief_history_summarizes_all_and_limits_selected_steps(
     tmp_path: Path,
 ) -> None:
@@ -123,6 +153,66 @@ def test_animation_history_preserves_intermediate_frames(tmp_path: Path) -> None
     assert "#1 action=6(x=3,y=7)" in output
     assert "animation tick 0:\nshape=1x1\n2" in output
     assert "after:\nshape=1x1\n3" in output
+
+
+def test_recent_full_history_keeps_newest_complete_transitions_within_bound(
+    tmp_path: Path,
+) -> None:
+    reader = TimelineHistoryReader(large_timeline(tmp_path / "timeline.jsonl"))
+
+    output = asyncio.run(reader.read(HistoryQuery(detail="full", limit=8)))
+
+    assert len(output) <= MAX_HISTORY_OUTPUT_CHARS
+    assert "#7 action=1" in output
+    assert "#0 action=1" not in output
+    assert "omitted older selected transitions:" in output
+    assert "use an explicit narrower range or indices query to continue" in output
+    assert output.count("before:\nshape=64x64") == output.count(
+        "after:\nshape=64x64"
+    )
+
+
+def test_explicit_full_history_fails_instead_of_returning_partial_selection(
+    tmp_path: Path,
+) -> None:
+    reader = TimelineHistoryReader(large_timeline(tmp_path / "timeline.jsonl"))
+
+    with pytest.raises(
+        ValueError,
+        match="explicit history selection exceeds the 50000-character output bound",
+    ):
+        asyncio.run(
+            reader.read(HistoryQuery(detail="full", start=0, end=7))
+        )
+
+
+def test_history_rejects_one_transition_larger_than_the_output_bound(
+    tmp_path: Path,
+) -> None:
+    grids = tuple(
+        tuple(tuple(value for _ in range(64)) for _ in range(64))
+        for value in range(16)
+    )
+    timeline = JsonlTimeline.create(
+        tmp_path / "timeline.jsonl",
+        game_id="test-game",
+    )
+    timeline.initialize(large_observation(0))
+    timeline.append(
+        action=simple_action(),
+        after=large_observation(1, ticks=grids),
+        model_revision="large-revision",
+        prediction=None,
+    )
+    reader = TimelineHistoryReader(timeline)
+
+    with pytest.raises(
+        ValueError,
+        match="transition #0 exceeds the 50000-character output bound",
+    ):
+        asyncio.run(
+            reader.read(HistoryQuery(detail="animation", indices=(0,)))
+        )
 
 
 def test_empty_history_is_explicit(tmp_path: Path) -> None:
