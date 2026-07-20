@@ -1,0 +1,36 @@
+<section
+  id="artifacts"
+  class="artifact-section"
+  hx-get="/sessions/{{ session.session_id }}/artifacts"
+  hx-trigger="sse:session-update"
+  hx-swap="outerHTML"
+>
+  <header class="section-heading">
+    <div>
+      <p class="eyebrow">WORKING KNOWLEDGE</p>
+      <h2>Scientific scratchpad</h2>
+    </div>
+    {% if session.latest_revision %}<code>{{ session.latest_revision[:12] }}</code>{% endif %}
+  </header>
+
+  {% if session.latest_commit_reason %}
+  <div class="current-intent">
+    <small>LATEST COMMIT</small>
+    <p>{{ session.latest_commit_reason }}</p>
+    <span>{{ session.latest_commit_suggestion }}</span>
+  </div>
+  {% endif %}
+
+  <details open>
+    <summary>notes.md</summary>
+    <pre>{{ notes }}</pre>
+  </details>
+  <details>
+    <summary>world_model_v5.py</summary>
+    {% if world_model %}
+    <pre><code>{{ world_model }}</code></pre>
+    {% else %}
+    <p class="empty-state">No world model has been installed.</p>
+    {% endif %}
+  </details>
+</section>

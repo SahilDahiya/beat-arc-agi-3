@@ -61,6 +61,24 @@ live ARC process. The exact pending model request is resumed only when the event
 journal proves a matching durable checkpoint. Otherwise restart begins a fresh
 deliberation from the replayed current observation.
 
+## Observe a Session
+
+Serve the read-only discovery console for a live or completed Session:
+
+```bash
+uv run python -m beat_arc_agi_3 observe \
+    --session SESSION_ID \
+    --host 127.0.0.1 \
+    --port 8765
+```
+
+Open the URL printed by the command. The observer renders the current ARC grid,
+before/predicted/observed comparisons, animation ticks, the complete transition
+rail, recent discovery events, `notes.md`, and `world_model_v5.py`. Selecting a
+transition replays persisted evidence without changing the live Session. New
+journal events refresh the live panels through resumable server-sent events.
+The observer has no action, model, file-write, or environment routes.
+
 ## Run the Session-evidence regression
 
 The deterministic regression reads the two known successful LS20 Sessions. It

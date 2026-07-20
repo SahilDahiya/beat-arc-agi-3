@@ -30,6 +30,12 @@ Transient transport recovery is separate from Pydantic AI output/tool retry. The
 
 The `run` command creates a fresh Session from an explicit game and reusable label. The `restart --session SESSION_ID` command opens that exact Session, performs deterministic action replay, journals the new environment attempt, and continues in place only after exact agreement. Restart requires an operation mode but never creates another ID or directory. A pending model request is resumed only from a checkpoint correlated with the latest deliberation and exact durable message count; otherwise the restarted loop sends a fresh prompt grounded in the replayed observation. Omitted turn/action caps mean unlimited continuation of that process invocation. Restart is not exact live reconnection: each attempt's GUID and scorecard identity are persisted for diagnosis, but the ARC SDK does not expose restoration of the original affinity-bearing transport state.
 
+The `observe --session SESSION_ID` command reads `SESSIONS_ROOT` from the same
+required Settings object and serves only that explicit Session by default.
+`--host` defaults to `127.0.0.1` and `--port` defaults to `8765`; both are
+operator-facing CLI settings. Observation does not construct the model or ARC
+environment and has no write path.
+
 ## Loop policy boundary
 
 The current optional diagnostic controls are:

@@ -121,6 +121,45 @@ def test_restart_command_builds_and_executes_replay_process(
     )
 
 
+def test_observe_command_serves_one_read_only_session(
+    monkeypatch,
+    capsys,
+) -> None:
+    sessions_root = object()
+    captured: dict[str, object] = {}
+
+    def record_serve(**kwargs) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr(
+        cli,
+        "Settings",
+        lambda: SimpleNamespace(sessions_root=sessions_root),
+    )
+    monkeypatch.setattr(cli, "serve_observer", record_serve)
+
+    assert cli.main(
+        [
+            "observe",
+            "--session",
+            "session-1",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8765",
+        ]
+    ) == 0
+    assert captured == {
+        "sessions_root": sessions_root,
+        "session_id": "session-1",
+        "host": "127.0.0.1",
+        "port": 8765,
+    }
+    assert capsys.readouterr().out == (
+        "observer=http://127.0.0.1:8765/sessions/session-1\n"
+    )
+
+
 def test_auth_login_waits_for_callback_and_saves_credentials(
     monkeypatch,
     capsys,

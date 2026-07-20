@@ -1,0 +1,34 @@
+<section
+  id="event-list"
+  class="discovery-section"
+  hx-get="/sessions/{{ session.session_id }}/event-list"
+  hx-trigger="sse:session-update"
+  hx-swap="outerHTML"
+>
+  <header class="section-heading">
+    <div>
+      <p class="eyebrow">DISCOVERY TIMELINE</p>
+      <h2>What the agent is doing</h2>
+    </div>
+    <span>{{ session.event_count }} events</span>
+  </header>
+  <ol class="event-list">
+    {% for event in session.events|reverse %}
+    <li class="event-row tone-{{ event.tone }}">
+      <span class="event-seq">{{ event.seq }}</span>
+      <span class="phase-label phase-{{ event.phase }}">{{ event.phase }}</span>
+      <div class="event-copy">
+        <strong>{{ event.summary }}</strong>
+        <small>turn {{ event.turn }} · {{ event.event_type }}</small>
+        {% if event.details %}
+        <div class="event-details">
+          {% for label, value in event.details %}
+          <span>{{ label }}: {{ value }}</span>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ol>
+</section>

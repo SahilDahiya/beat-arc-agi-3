@@ -23,6 +23,7 @@ from beat_arc_agi_3.oauth_store import (
     get_openai_codex_credentials,
     set_openai_codex_credentials,
 )
+from beat_arc_agi_3.observer_web import serve_observer
 from beat_arc_agi_3.process import (
     ProcessConfig,
     RestartProcessConfig,
@@ -68,6 +69,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--retry-base-delay-seconds", type=float, default=2.0
     )
 
+    observe_parser = subparsers.add_parser(
+        "observe",
+        help="serve the read-only Session observer",
+    )
+    observe_parser.add_argument("--session", required=True)
+    observe_parser.add_argument("--host", default="127.0.0.1")
+    observe_parser.add_argument("--port", type=int, default=8765)
+
     eval_parser = subparsers.add_parser(
         "eval",
         help="evaluate persisted ARC Session evidence",
@@ -112,6 +121,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "observe":
+        settings = Settings()
+        print(
+            f"observer=http://{args.host}:{args.port}/sessions/{args.session}"
+        )
+        serve_observer(
+            sessions_root=settings.sessions_root,
+            session_id=args.session,
+            host=args.host,
+            port=args.port,
+        )
+        return 0
+
     if args.command == "auth":
         if args.auth_command == "login":
             flow, start = start_openai_codex_login()

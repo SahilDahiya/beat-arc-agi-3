@@ -1,0 +1,23 @@
+<header
+  id="session-status"
+  class="session-header"
+  hx-get="/sessions/{{ session.session_id }}/status"
+  hx-trigger="sse:session-update"
+  hx-swap="outerHTML"
+>
+  <a class="wordmark" href="/">ARC Discovery</a>
+  <div class="session-heading">
+    <span class="live-indicator status-{{ session.status }}"></span>
+    <div>
+      <strong>{{ session.game_id }}</strong>
+      <small>{{ session.status }} · turn {{ session.latest_turn }} · action {{ session.transition_count }}</small>
+    </div>
+  </div>
+  <div class="header-measures">
+    {% if session.current_observation %}
+    <span><small>LEVEL</small>{{ session.current_observation.levels_completed }}/{{ session.current_observation.win_levels }}</span>
+    <span><small>STATE</small>{{ session.current_observation.state.value }}</span>
+    {% endif %}
+    <span><small>MODEL</small>{{ session.model.split(':')[-1] }}</span>
+  </div>
+</header>

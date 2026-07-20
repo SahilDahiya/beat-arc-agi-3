@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ARC Discovery / Sessions</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='/observer.css') }}">
+</head>
+<body class="index-shell">
+  <main class="session-index">
+    <header class="index-heading">
+      <p class="eyebrow">BEAT ARC-AGI-3</p>
+      <h1>Discovery sessions</h1>
+      <p>Read-only evidence from agent runs, ordered by latest activity.</p>
+    </header>
+    <nav class="session-list" aria-label="Sessions">
+      {% for session in sessions %}
+      <a class="session-row" href="/sessions/{{ session.session_id }}">
+        <span class="session-state status-{{ session.status }}"></span>
+        <span class="session-identity">
+          <strong>{{ session.game_id }}</strong>
+          <small>{{ session.session_id }}</small>
+        </span>
+        <span class="session-progress">
+          {% if session.current_observation %}
+          L{{ session.current_observation.levels_completed }}/{{ session.current_observation.win_levels }}
+          {% else %}
+          awaiting frame
+          {% endif %}
+        </span>
+        <span class="session-count">{{ session.transition_count }} actions</span>
+      </a>
+      {% else %}
+      <p class="empty-state">No Sessions exist in this repository yet.</p>
+      {% endfor %}
+    </nav>
+  </main>
+</body>
+</html>

@@ -1,0 +1,104 @@
+<section
+  id="workspace"
+  class="frame-workspace{% if selected.is_live %} is-live{% endif %}"
+  {% if selected.is_live %}
+  hx-get="/sessions/{{ session_id }}/workspace"
+  hx-trigger="sse:session-update"
+  hx-swap="outerHTML swap:120ms settle:120ms"
+  {% endif %}
+>
+  {% set sid = session_id %}
+  <div class="frame-heading">
+    <div>
+      <p class="eyebrow">{% if selected.is_live %}LIVE OBSERVATION{% else %}REPLAY POSITION{% endif %}</p>
+      <h1>{{ selected.title }}</h1>
+    </div>
+    <div class="frame-facts">
+      <span>{{ selected.action_label }}</span>
+      <span>{{ selected.changed_cells }} changed cells</span>
+      <span>L{{ selected.observation.levels_completed }}/{{ selected.observation.win_levels }}</span>
+    </div>
+  </div>
+
+  <div class="visual-stage">
+    <figure class="current-frame">
+      <img
+        src="/sessions/{{ sid }}/frames/{{ selected.position }}.svg"
+        alt="ARC frame at position {{ selected.position }}"
+      >
+      <figcaption>Observed · position {{ selected.position }}</figcaption>
+    </figure>
+
+    {% if selected.transition %}
+    <div class="comparison-strip">
+      <figure>
+        <img src="/sessions/{{ sid }}/frames/{{ selected.position }}.svg?kind=before" alt="Frame before action">
+        <figcaption>Before</figcaption>
+      </figure>
+      {% if selected.transition.prediction %}
+      <figure>
+        <img src="/sessions/{{ sid }}/frames/{{ selected.position }}.svg?kind=predicted" alt="World-model prediction">
+        <figcaption>Predicted · {{ selected.transition.prediction_status }}</figcaption>
+      </figure>
+      {% endif %}
+      <figure>
+        <img src="/sessions/{{ sid }}/frames/{{ selected.position }}.svg?kind=difference" alt="Changed cells">
+        <figcaption>Difference</figcaption>
+      </figure>
+    </div>
+    {% endif %}
+  </div>
+
+  {% if selected.observation.ticks %}
+  <div class="animation-strip">
+    <p class="eyebrow">ANIMATION TICKS</p>
+    <div>
+      {% for tick in selected.observation.ticks %}
+      <img src="/sessions/{{ sid }}/frames/{{ selected.position }}.svg?tick={{ loop.index0 }}" alt="Animation tick {{ loop.index0 }}">
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="position-stepper">
+    <button
+      class="step-button"
+      {% if selected.position == 0 %}disabled{% endif %}
+      hx-get="/sessions/{{ sid }}/workspace?position={{ selected.position - 1 }}"
+      hx-target="#workspace"
+      hx-swap="outerHTML swap:120ms settle:120ms"
+      aria-label="Previous position"
+    >&larr; Prev</button>
+    <span class="position-readout">{{ selected.position }} / {{ selected.current_position }}</span>
+    <button
+      class="step-button"
+      {% if selected.position == selected.current_position %}disabled{% endif %}
+      hx-get="/sessions/{{ sid }}/workspace?position={{ selected.position + 1 }}"
+      hx-target="#workspace"
+      hx-swap="outerHTML swap:120ms settle:120ms"
+      aria-label="Next position"
+    >Next &rarr;</button>
+  </div>
+
+  <nav class="transition-rail" aria-label="Timeline positions">
+    {% for marker in selected.markers %}
+    <button
+      class="transition-marker{% if marker.position == selected.position %} selected{% endif %}{% if marker.prediction_status == 'mismatch' %} mismatch{% endif %}{% if marker.level_up %} level-up{% endif %}"
+      hx-get="/sessions/{{ sid }}/workspace?position={{ marker.position }}"
+      hx-target="#workspace"
+      hx-swap="outerHTML swap:120ms settle:120ms"
+      title="{{ marker.label }}{% if marker.action %}: {{ marker.action }}{% endif %}"
+    >
+      <span>{{ marker.position }}</span>
+    </button>
+    {% endfor %}
+  </nav>
+  {% if not selected.is_live %}
+  <button
+    class="return-live"
+    hx-get="/sessions/{{ sid }}/workspace"
+    hx-target="#workspace"
+    hx-swap="outerHTML swap:120ms settle:120ms"
+  >Return to live</button>
+  {% endif %}
+</section>

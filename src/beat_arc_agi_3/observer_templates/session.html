@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ARC Discovery / {{ session.game_id }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='/observer.css') }}">
+  <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js" integrity="sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/htmx-ext-sse@2.2.4" integrity="sha384-A986SAtodyH8eg8x8irJnYUk7i9inVQqYigD6qZ9evobksGNIXfeFvDwLSHcp31N" crossorigin="anonymous"></script>
+</head>
+<body
+  class="observer-shell"
+  hx-ext="sse"
+  sse-connect="/sessions/{{ session.session_id }}/events"
+>
+  {% include "fragments/status.html" %}
+  <main class="observer-main">
+    <section class="primary-column" aria-label="Game workspace">
+      {% include "fragments/workspace.html" %}
+      {% include "fragments/events.html" %}
+    </section>
+    <aside class="artifact-column" aria-label="Agent working knowledge">
+      {% include "fragments/artifacts.html" %}
+    </aside>
+  </main>
+  <script>
+    // outerHTML swaps replace the rail, resetting its horizontal scroll.
+    document.body.addEventListener('htmx:afterSwap', function (event) {
+      var marker = event.target.querySelector('.transition-marker.selected');
+      if (marker) {
+        marker.scrollIntoView({block: 'nearest', inline: 'center'});
+      }
+    });
+  </script>
+</body>
+</html>
