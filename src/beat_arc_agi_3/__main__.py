@@ -51,9 +51,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     restart_parser = subparsers.add_parser(
         "restart",
-        help="replay a Session exactly and continue in a new child Session",
+        help="replay ARC state and continue the same Session",
     )
-    restart_parser.add_argument("--from-session", required=True)
     restart_parser.add_argument("--session", required=True)
     restart_parser.add_argument(
         "--mode",
@@ -174,9 +173,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "restart":
         config = RestartProcessConfig(
-            parent_session_id=args.from_session,
-            session_label=args.session,
-            started_at=datetime.now(UTC),
+            session_id=args.session,
             operation_mode=OperationMode(args.mode),
             max_turns=args.max_turns,
             max_actions=args.max_actions,
@@ -189,7 +186,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         observation = result.observation
         print(
             f"session={config.session_id} "
-            f"parent={config.parent_session_id} "
             f"stop={result.stop_reason} turns={result.turns} "
             f"actions={result.actions} state={observation.state.value} "
             f"levels={observation.levels_completed}/{observation.win_levels}"

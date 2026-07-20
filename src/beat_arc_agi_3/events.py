@@ -44,22 +44,34 @@ class SessionStartedEvent(_Event):
     model: str = Field(min_length=1)
 
 
-class InheritedSnapshot(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+class EnvironmentReplayStartedEvent(_Event):
+    type: Literal["environment_replay_started"] = (
+        "environment_replay_started"
+    )
+    attempt: int = Field(ge=2)
+    operation_mode: Literal["normal", "online", "offline", "competition"]
+    environment_guid: str | None = None
+    scorecard_id: str = Field(min_length=1)
+    expected_transitions: int = Field(ge=0)
 
-    cleared_level: int = Field(ge=0)
-    revision: str = Field(min_length=1)
-    path: str = Field(min_length=1)
+
+class EnvironmentReplayFailedEvent(_Event):
+    type: Literal["environment_replay_failed"] = "environment_replay_failed"
+    attempt: int = Field(ge=2)
+    error_type: str = Field(min_length=1)
+    message: str = Field(min_length=1)
 
 
-class SessionRestartedEvent(_Event):
-    type: Literal["session_restarted"] = "session_restarted"
-    parent_session_id: str = Field(min_length=1)
+class EnvironmentRestartedEvent(_Event):
+    type: Literal["environment_restarted"] = "environment_restarted"
+    attempt: int = Field(ge=2)
+    operation_mode: Literal["normal", "online", "offline", "competition"]
+    environment_guid: str | None = None
+    scorecard_id: str = Field(min_length=1)
     replayed_transitions: int = Field(ge=0)
     checkpoint_state: GameState
     checkpoint_levels_completed: int = Field(ge=0)
     resumes_pending_deliberation: bool
-    inherited_snapshots: tuple[InheritedSnapshot, ...] = ()
 
 
 class TurnStartedEvent(_Event):
@@ -229,7 +241,9 @@ class RunInterruptedEvent(_Event):
 
 ArcEvent = Annotated[
     SessionStartedEvent
-    | SessionRestartedEvent
+    | EnvironmentReplayStartedEvent
+    | EnvironmentReplayFailedEvent
+    | EnvironmentRestartedEvent
     | TurnStartedEvent
     | DeliberationStartedEvent
     | DeliberationCheckpointedEvent
@@ -370,18 +384,19 @@ __all__ = [
     "DeliberationAttemptFailedEvent",
     "DeliberationCheckpointedEvent",
     "DeliberationStartedEvent",
+    "EnvironmentReplayFailedEvent",
+    "EnvironmentReplayStartedEvent",
+    "EnvironmentRestartedEvent",
     "EventJournal",
     "EventJournalCorruptionError",
     "EventJournalEntry",
     "EventJournalError",
     "EventJournalNotFoundError",
-    "InheritedSnapshot",
     "PredictionMismatchEvent",
     "QueueCancelledEvent",
     "RunCompletedEvent",
     "RunFailedEvent",
     "RunInterruptedEvent",
-    "SessionRestartedEvent",
     "SessionStartedEvent",
     "ToolCompletedEvent",
     "ToolFailedEvent",

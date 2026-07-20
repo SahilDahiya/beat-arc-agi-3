@@ -22,10 +22,11 @@ expected facts for both Sessions, including actions, turns, prediction counts,
 tool counts, snapshot evidence, and post-target failure state.
 
 Synthetic tests cover target-not-reached, missing target-action evidence,
-missing snapshot evidence, run failure before target, interruption before
-target, and failure after target. Regression cases compare observed facts with
-their declared expectation, so a correctly extracted failed Session passes and
-an always-success scorer cannot pass the suite.
+missing snapshot evidence, unrecovered run failure before target, interruption
+before target, recovery by exact environment replay, and failure after target.
+Regression cases compare observed facts with their declared expectation, so a
+correctly extracted failed Session passes and an always-success scorer cannot
+pass the suite.
 
 ## What is scored
 
@@ -34,9 +35,11 @@ facts declared by each fixture. It does not require every fixture to represent
 success.
 
 Ad hoc Session scoring asks whether the target environment level was reached,
-its Timeline/action-event/model-snapshot evidence is complete, and no run
-failure or interruption preceded that target. A failure after the target does
-not invalidate the completed stage:
+its Timeline/action-event/model-snapshot evidence is complete, and no
+unrecovered run failure or interruption preceded that target. An exact
+`environment_restarted` event before the target resolves an earlier failed
+process attempt. A failure after the target does not invalidate the completed
+stage:
 
 ```bash
 uv run python -m beat_arc_agi_3 eval session \

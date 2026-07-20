@@ -8,7 +8,7 @@ The harness owns its ChatGPT subscription OAuth flow. Run `uv run python -m beat
 
 For the current repository-local process, `.env` sets `SESSIONS_ROOT=./sessions`. `Settings` resolves it against the repository root and rejects paths outside or below that root. The runtime directory is ignored by Git.
 
-Each process must receive an explicit session ID and choose exactly one operation: create a fresh Session or replay-restart an existing parent into a new child. A Session stores `session.json`, `messages.jsonl`, `timeline.jsonl`, `events.jsonl`, canonical `notes.md`, the live `world_model_v5.py`, and cleared-level snapshots under `sessions/<session-id>/`. Environment history is generated from the Timeline; operational and decision history is reconstructed from the append-only event journal. Neither has a mutable duplicate.
+Each process must receive an explicit Session selection and choose exactly one operation: create a fresh timestamped Session from a label, or replay-restart an existing Session by its exact ID. A Session stores `session.json`, `messages.jsonl`, `timeline.jsonl`, `events.jsonl`, canonical `notes.md`, the live `world_model_v5.py`, and cleared-level snapshots under `sessions/<session-id>/`. Environment history is generated from the Timeline; operational and decision history is reconstructed from the append-only event journal. Neither has a mutable duplicate.
 
 The repository currently retains a small set of bounded policy defaults while process bootstrap is being built:
 
@@ -28,7 +28,7 @@ Transient transport recovery is separate from Pydantic AI output/tool retry. The
 
 `ProcessConfig` requires the game ID, session label, timezone-aware start time, and Arcade operation mode. `max_turns` and `max_actions` are optional positive values that default to `None`. It derives the storage ID as `<UTC timestamp>-<session label>`, using microsecond precision. `run_process` is the canonical composition root for a new Session. It resolves the real versioned game ID from Arcade before creating that Session. Missing or invalid required values fail before the model request and agent-driven action; environment creation failure and a missing initial observation fail without substitutes.
 
-The `run` command creates a fresh Session from an explicit game. The `restart --from-session PARENT` command performs deterministic action replay and creates a new lineaged child only after exact agreement. Both require a reusable label and operation mode and capture the start time once in UTC. Omitted turn/action caps mean unlimited continuation. Restart is not exact live reconnection: GUID and scorecard identity are persisted for diagnosis, but the ARC SDK does not expose restoration of the original affinity-bearing transport state.
+The `run` command creates a fresh Session from an explicit game and reusable label. The `restart --session SESSION_ID` command opens that exact Session, performs deterministic action replay, journals the new environment attempt, and continues in place only after exact agreement. Restart requires an operation mode but never creates another ID or directory. Omitted turn/action caps mean unlimited continuation of that process invocation. Restart is not exact live reconnection: each attempt's GUID and scorecard identity are persisted for diagnosis, but the ARC SDK does not expose restoration of the original affinity-bearing transport state.
 
 ## Loop policy boundary
 

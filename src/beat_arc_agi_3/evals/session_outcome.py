@@ -7,6 +7,7 @@ from pydantic_evals import increment_eval_metric, set_eval_attribute
 from beat_arc_agi_3.evals.models import StageEvalInput, StageEvalOutcome
 from beat_arc_agi_3.events import (
     ActionCompletedEvent,
+    EnvironmentRestartedEvent,
     EventJournalEntry,
     RunFailedEvent,
     RunInterruptedEvent,
@@ -80,8 +81,13 @@ def extract_stage_outcome(
         if isinstance(entry.event, (RunFailedEvent, RunInterruptedEvent))
     )
     failure_before_target = any(
-        boundary_seq is None or entry.seq < boundary_seq
+        not _failure_was_recovered(
+            entry,
+            entries=entries,
+            boundary_seq=boundary_seq,
+        )
         for entry in failure_entries
+        if boundary_seq is None or entry.seq < boundary_seq
     )
     post_target_failure = next(
         (
@@ -157,6 +163,20 @@ def _find_target_action_entry(
             and entry.event.level_up
         ),
         None,
+    )
+
+
+def _failure_was_recovered(
+    failure_entry: EventJournalEntry,
+    *,
+    entries: tuple[EventJournalEntry, ...],
+    boundary_seq: int | None,
+) -> bool:
+    return any(
+        isinstance(entry.event, EnvironmentRestartedEvent)
+        and entry.seq > failure_entry.seq
+        and (boundary_seq is None or entry.seq < boundary_seq)
+        for entry in entries
     )
 
 

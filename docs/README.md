@@ -42,22 +42,22 @@ The command uses ChatGPT subscription model access and performs real ARC actions
 
 For a private diagnostic run, the harness operator may add positive `--max-turns` and/or `--max-actions` caps. These caps are enforced by the outer loop and are never included in agent dependencies or prompts.
 
-If a model request exhausts its harness-owned transient retries, restart from
-the durable Session into a new timestamped child:
+If a model request exhausts its harness-owned transient retries, restart the
+same durable Session:
 
 ```bash
 uv run python -m beat_arc_agi_3 restart \
-  --from-session 20260720T015311.060076Z-ls20-world-model-001 \
-  --session ls20-restart-001 \
+  --session 20260720T015311.060076Z-ls20-world-model-001 \
   --mode online
 ```
 
 Restart performs real ARC actions: it creates a fresh environment and replays
-every confirmed parent action, comparing every observation exactly. It refuses
-an uncertain action or any replay divergence. Only after replay succeeds does
-it create the child and continue from the persisted conversation, Timeline,
-notes, world model, snapshots, and other UTF-8 working files. This is
-restart-by-replay, not reconnection to the original live ARC process.
+every confirmed action, comparing every observation exactly. It refuses an
+uncertain action or any replay divergence. After replay succeeds, it appends an
+environment-attempt event and continues the existing conversation, Timeline,
+notes, world model, snapshots, turn numbers, and action numbers in the same
+Session directory. This is restart-by-replay, not reconnection to the original
+live ARC process.
 
 ## Run the Session-evidence regression
 

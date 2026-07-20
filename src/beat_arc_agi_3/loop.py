@@ -43,6 +43,16 @@ class LoopPolicy(BaseModel):
     retry_base_delay_seconds: float = Field(default=2.0, ge=0)
 
 
+class LoopRestartContext(BaseModel):
+    """Validated environment replay boundary for continuing one Session."""
+
+    model_config = ConfigDict(frozen=True)
+
+    environment_attempt: int = Field(ge=2)
+    replayed_transitions: int = Field(ge=0)
+    resumes_pending_deliberation: bool
+
+
 class LoopResult(BaseModel):
     """Terminal accounting for one loop run."""
 
@@ -84,6 +94,7 @@ async def run_agent_loop(
     initial_observation: GameObservation,
     session: Session,
     policy: LoopPolicy,
+    restart: LoopRestartContext | None = None,
 ) -> LoopResult:
     """Observe, deliberate, execute, and record with optional private caps."""
 
@@ -93,7 +104,7 @@ async def run_agent_loop(
             f"environment game {current.game_id} does not match "
             f"session game {session.metadata.game_id}"
         )
-    if session.metadata.origin == "fresh":
+    if restart is None:
         if session.timeline.initial_observation is not None:
             raise ValueError(
                 "fresh agent loop requires an uninitialized Timeline"
@@ -113,16 +124,19 @@ async def run_agent_loop(
             raise ValueError(
                 "restart observation does not match replayed Timeline tail"
             )
-        if not session.conversation.messages():
-            raise ValueError("restart requires the inherited conversation")
         turn_context = (
-            f"This Session restarted from "
-            f"{session.metadata.parent_session_id} after deterministic replay "
-            f"of {session.metadata.replayed_transitions} transition(s)."
+            f"This Session is continuing on environment attempt "
+            f"{restart.environment_attempt} after deterministic replay of "
+            f"{restart.replayed_transitions} transition(s)."
         )
 
     turns = 0
-    active_turn = 0
+    turn_offset = (
+        max((entry.turn for entry in session.events.entries()), default=0)
+        if restart is not None
+        else 0
+    )
+    active_turn = turn_offset
     actions_taken = 0
     turn_context = (
         f"{turn_context}\n"
@@ -132,7 +146,7 @@ async def run_agent_loop(
 
     def complete(stop_reason: StopReason) -> LoopResult:
         session.events.append(
-            turn=turns,
+            turn=active_turn,
             event=RunCompletedEvent(
                 summary=(
                     f"Run stopped: {stop_reason}; {turns} turn(s), "
@@ -167,7 +181,7 @@ async def run_agent_loop(
             if not current.legal_action_names:
                 return complete("no_legal_actions")
 
-            turn_number = turns + 1
+            turn_number = turn_offset + turns + 1
             active_turn = turn_number
             session.events.append(
                 turn=turn_number,
@@ -199,10 +213,11 @@ async def run_agent_loop(
                 ),
                 resume_from_checkpoint=(
                     turns == 0
-                    and session.metadata.resumes_pending_deliberation
+                    and restart is not None
+                    and restart.resumes_pending_deliberation
                 ),
             )
-            turns = turn_number
+            turns += 1
             committed_count = len(commit.actions)
             executed_count = 0
             queue_stop = "the committed queue completed"
@@ -244,9 +259,9 @@ async def run_agent_loop(
                 if pending_prediction is not None:
                     model_revision = pending_prediction.revision
                 transition_index = len(session.timeline.transitions())
-                action_number = actions_taken + 1
+                action_number = transition_index + 1
                 session.events.append(
-                    turn=turns,
+                    turn=active_turn,
                     event=ActionStartedEvent(
                         summary=(
                             f"Executing action {action_number}: "
@@ -284,7 +299,7 @@ async def run_agent_loop(
                 executed_count += 1
                 actions_taken += 1
                 session.events.append(
-                    turn=turns,
+                    turn=active_turn,
                     event=ActionCompletedEvent(
                         summary=(
                             f"Action {action_number} completed as transition "
@@ -310,7 +325,7 @@ async def run_agent_loop(
                         revision=model_revision,
                     )
                     session.events.append(
-                        turn=turns,
+                        turn=active_turn,
                         event=WorldModelSnapshottedEvent(
                             summary=(
                                 f"Snapshotted world model revision "
@@ -330,7 +345,7 @@ async def run_agent_loop(
                     break
                 if prediction_status == "mismatch":
                     session.events.append(
-                        turn=turns,
+                        turn=active_turn,
                         event=PredictionMismatchEvent(
                             summary=(
                                 f"World model revision "
@@ -365,7 +380,7 @@ async def run_agent_loop(
 
             if queue_cancel_reason is not None:
                 session.events.append(
-                    turn=turns,
+                    turn=active_turn,
                     event=QueueCancelledEvent(
                         summary=f"Committed queue stopped: {queue_stop}",
                         reason=queue_cancel_reason,
@@ -374,10 +389,11 @@ async def run_agent_loop(
                     ),
                 )
             session.events.append(
-                turn=turns,
+                turn=active_turn,
                 event=TurnCompletedEvent(
                     summary=(
-                        f"Turn {turns} completed: executed {executed_count}/"
+                        f"Turn {active_turn} completed: executed "
+                        f"{executed_count}/"
                         f"{committed_count} committed action(s)"
                     ),
                     committed_actions=committed_count,

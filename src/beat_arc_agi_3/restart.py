@@ -1,4 +1,5 @@
-from pathlib import Path
+from arcengine import GameState
+from pydantic_ai import ModelRequest
 
 from beat_arc_agi_3.adapter import ArcGameAdapter
 from beat_arc_agi_3.events import ActionCompletedEvent, ActionStartedEvent
@@ -7,57 +8,90 @@ from beat_arc_agi_3.session import Session
 
 
 class RestartError(RuntimeError):
-    """Base failure for explicit replay-based Session restart."""
+    """Base failure for explicit replay-based environment restart."""
 
 
 class RestartUnsafeError(RestartError):
-    """Raised when parent evidence cannot prove a safe replay boundary."""
+    """Raised when Session evidence cannot prove a safe replay boundary."""
 
 
 class ReplayDivergenceError(RestartError):
-    """Raised when a fresh environment does not reproduce parent evidence."""
+    """Raised when a fresh environment does not reproduce Session evidence."""
+
+
+def resumes_pending_deliberation(session: Session) -> bool:
+    """Return whether restart should continue a saved model request."""
+
+    last_started = 0
+    last_commit = 0
+    for entry in session.events.entries():
+        if entry.event.type == "deliberation_started":
+            last_started = entry.seq
+        elif entry.event.type == "commit_accepted":
+            last_commit = entry.seq
+    pending = last_started > last_commit
+    if not pending:
+        return False
+    messages = session.conversation.messages()
+    if (
+        not messages
+        or not isinstance(messages[-1], ModelRequest)
+        or messages[-1].state != "complete"
+    ):
+        raise RestartUnsafeError(
+            "pending deliberation has no provider-valid request checkpoint"
+        )
+    return True
 
 
 def replay_session(
     *,
-    parent: Session,
+    session: Session,
     adapter: ArcGameAdapter,
     initial_observation: GameObservation,
 ) -> GameObservation:
-    """Replay every confirmed parent action and require exact observations."""
+    """Replay confirmed Session actions and require exact observations."""
+
+    transitions = session.timeline.transitions()
+    tail = (
+        transitions[-1].after
+        if transitions
+        else session.timeline.initial_observation
+    )
+    if tail is not None and tail.state is GameState.WIN:
+        raise RestartUnsafeError("Session is already in WIN state")
 
     started = {
-        (entry.event.action_number, entry.event.transition_index)
-        for entry in parent.events.entries()
+        entry.event.transition_index
+        for entry in session.events.entries()
         if isinstance(entry.event, ActionStartedEvent)
     }
     completed = {
-        (entry.event.action_number, entry.event.transition_index)
-        for entry in parent.events.entries()
+        entry.event.transition_index
+        for entry in session.events.entries()
         if isinstance(entry.event, ActionCompletedEvent)
     }
     uncertain = started - completed
     if uncertain:
-        action_number, transition_index = min(uncertain)
+        transition_index = min(uncertain)
         raise RestartUnsafeError(
-            "parent contains an uncertain ARC action: "
-            f"action {action_number}, transition {transition_index} started "
-            "without durable completion"
+            "Session contains an uncertain ARC action: transition "
+            f"{transition_index} started without durable completion"
         )
 
-    expected_initial = parent.timeline.initial_observation
+    expected_initial = session.timeline.initial_observation
     if expected_initial is None:
-        raise RestartUnsafeError("parent Timeline has no initial observation")
+        raise RestartUnsafeError("Session Timeline has no initial observation")
     if initial_observation != expected_initial:
         raise ReplayDivergenceError(
-            "fresh environment initial observation does not match parent"
+            "fresh environment initial observation does not match Session"
         )
 
     current = initial_observation
-    for transition in parent.timeline.transitions():
+    for transition in transitions:
         if current != transition.before:
             raise RestartUnsafeError(
-                f"parent Timeline is discontinuous at transition "
+                f"Session Timeline is discontinuous at transition "
                 f"{transition.index}"
             )
         current = adapter.apply(transition.action)
@@ -67,38 +101,3 @@ def replay_session(
                 f"{transition.action.action}"
             )
     return current
-
-
-def create_restarted_session(
-    *,
-    parent: Session,
-    sessions_root: str | Path,
-    session_id: str,
-    model: str,
-    checkpoint: GameObservation,
-    operation_mode: str | None = None,
-    environment_guid: str | None = None,
-    scorecard_id: str | None = None,
-) -> Session:
-    """Create an atomic child Session after successful deterministic replay."""
-
-    transitions = parent.timeline.transitions()
-    expected = (
-        transitions[-1].after
-        if transitions
-        else parent.timeline.initial_observation
-    )
-    if expected is None or checkpoint != expected:
-        raise RestartUnsafeError(
-            "replay checkpoint does not match the parent Timeline tail"
-        )
-    return Session.create(
-        sessions_root=sessions_root,
-        session_id=session_id,
-        game_id=parent.metadata.game_id,
-        model=model,
-        restart_parent=parent,
-        operation_mode=operation_mode,
-        environment_guid=environment_guid,
-        scorecard_id=scorecard_id,
-    )

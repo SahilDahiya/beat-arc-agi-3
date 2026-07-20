@@ -30,6 +30,7 @@ from beat_arc_agi_3.evals.session_stage import (
 )
 from beat_arc_agi_3.events import (
     ActionCompletedEvent,
+    EnvironmentRestartedEvent,
     RunFailedEvent,
     RunInterruptedEvent,
     ToolCompletedEvent,
@@ -59,6 +60,7 @@ def create_session(
     include_target_action: bool = True,
     include_snapshot: bool = True,
     failure_before_target: str | None = None,
+    recovered_before_target: bool = False,
     failure_after_target: bool = False,
 ) -> Session:
     session = Session.create(
@@ -129,6 +131,21 @@ def create_session(
                 summary="Operator interrupted run",
                 error_type="KeyboardInterrupt",
                 message="Interrupted",
+            ),
+        )
+    if recovered_before_target:
+        session.events.append(
+            turn=2,
+            event=EnvironmentRestartedEvent(
+                summary="Environment replay completed",
+                attempt=2,
+                operation_mode="online",
+                environment_guid="replacement-guid",
+                scorecard_id="replacement-scorecard",
+                replayed_transitions=1,
+                checkpoint_state=GameState.NOT_FINISHED,
+                checkpoint_levels_completed=0,
+                resumes_pending_deliberation=True,
             ),
         )
     if include_target_action:
@@ -297,6 +314,22 @@ def test_extract_stage_outcome_detects_failure_before_target(
 
     assert outcome.target_reached is True
     assert outcome.failure_before_target is True
+
+
+def test_extract_stage_outcome_accepts_recovered_failure_before_target(
+    tmp_path: Path,
+) -> None:
+    session = create_session(
+        tmp_path,
+        session_id="recovered-failure-before-target",
+        failure_before_target="failed",
+        recovered_before_target=True,
+    )
+
+    outcome = extract_stage_outcome(session, target_levels_completed=1)
+
+    assert outcome.target_reached is True
+    assert outcome.failure_before_target is False
 
 
 def test_stage_outcome_eval_reports_assertions_and_metrics(

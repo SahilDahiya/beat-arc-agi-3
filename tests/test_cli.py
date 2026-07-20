@@ -97,10 +97,8 @@ def test_restart_command_builds_and_executes_replay_process(
     exit_code = cli.main(
         [
             "restart",
-            "--from-session",
-            "failed-parent",
             "--session",
-            "ls20-restart-001",
+            "failed-parent",
             "--mode",
             "online",
             "--max-turns",
@@ -113,14 +111,13 @@ def test_restart_command_builds_and_executes_replay_process(
     assert exit_code == 0
     assert captured["settings"] is settings
     config = captured["config"]
-    assert config.parent_session_id == "failed-parent"
-    assert config.session_label == "ls20-restart-001"
+    assert config.session_id == "failed-parent"
     assert config.operation_mode is OperationMode.ONLINE
     assert config.max_turns == 20
     assert config.max_actions == 80
     assert capsys.readouterr().out == (
-        f"session={config.session_id} parent=failed-parent "
-        "stop=max_turns turns=2 actions=3 state=NOT_FINISHED levels=1/7\n"
+        "session=failed-parent stop=max_turns turns=2 actions=3 "
+        "state=NOT_FINISHED levels=1/7\n"
     )
 
 
