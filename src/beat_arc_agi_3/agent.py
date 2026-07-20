@@ -576,6 +576,7 @@ def build_openai_model(settings: Settings) -> OpenAICodexResponsesModel:
             openai_client=AsyncOpenAI(
                 base_url="https://chatgpt.com/backend-api/codex",
                 api_key=credentials.access,
+                max_retries=0,
                 default_headers={
                     "chatgpt-account-id": credentials.account_id,
                     "originator": "beat-arc-agi-3",

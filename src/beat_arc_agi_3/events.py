@@ -44,6 +44,24 @@ class SessionStartedEvent(_Event):
     model: str = Field(min_length=1)
 
 
+class InheritedSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    cleared_level: int = Field(ge=0)
+    revision: str = Field(min_length=1)
+    path: str = Field(min_length=1)
+
+
+class SessionRestartedEvent(_Event):
+    type: Literal["session_restarted"] = "session_restarted"
+    parent_session_id: str = Field(min_length=1)
+    replayed_transitions: int = Field(ge=0)
+    checkpoint_state: GameState
+    checkpoint_levels_completed: int = Field(ge=0)
+    resumes_pending_deliberation: bool
+    inherited_snapshots: tuple[InheritedSnapshot, ...] = ()
+
+
 class TurnStartedEvent(_Event):
     type: Literal["turn_started"] = "turn_started"
     state: GameState
@@ -53,6 +71,25 @@ class TurnStartedEvent(_Event):
 
 class DeliberationStartedEvent(_Event):
     type: Literal["deliberation_started"] = "deliberation_started"
+
+
+class DeliberationCheckpointedEvent(_Event):
+    type: Literal["deliberation_checkpointed"] = "deliberation_checkpointed"
+    attempt: int = Field(ge=1)
+    messages_added: int = Field(ge=1)
+    total_messages: int = Field(ge=1)
+
+
+class DeliberationAttemptFailedEvent(_Event):
+    type: Literal["deliberation_attempt_failed"] = (
+        "deliberation_attempt_failed"
+    )
+    attempt: int = Field(ge=1)
+    max_attempts: int = Field(ge=1)
+    will_retry: bool
+    delay_seconds: float = Field(ge=0)
+    error_type: str = Field(min_length=1)
+    message: str = Field(min_length=1)
 
 
 class ToolStartedEvent(_Event):
@@ -192,8 +229,11 @@ class RunInterruptedEvent(_Event):
 
 ArcEvent = Annotated[
     SessionStartedEvent
+    | SessionRestartedEvent
     | TurnStartedEvent
     | DeliberationStartedEvent
+    | DeliberationCheckpointedEvent
+    | DeliberationAttemptFailedEvent
     | ToolStartedEvent
     | ToolCompletedEvent
     | ToolFailedEvent
@@ -327,17 +367,21 @@ __all__ = [
     "ArcEvent",
     "BacktestCompletedEvent",
     "CommitAcceptedEvent",
+    "DeliberationAttemptFailedEvent",
+    "DeliberationCheckpointedEvent",
     "DeliberationStartedEvent",
     "EventJournal",
     "EventJournalCorruptionError",
     "EventJournalEntry",
     "EventJournalError",
     "EventJournalNotFoundError",
+    "InheritedSnapshot",
     "PredictionMismatchEvent",
     "QueueCancelledEvent",
     "RunCompletedEvent",
     "RunFailedEvent",
     "RunInterruptedEvent",
+    "SessionRestartedEvent",
     "SessionStartedEvent",
     "ToolCompletedEvent",
     "ToolFailedEvent",

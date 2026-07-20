@@ -39,7 +39,9 @@ The implemented foundation now provides:
 31. Separate full-prefix replay trust from active-revision online evidence on the current level in every deliberation context.
 32. Make synthesis mode explicit in the scientific scratchpad: use evidence-backed `goal_search` with an executable temporary predicate, or a bounded `discriminating_experiment` against a competing hypothesis.
 33. Separate complete durable Pydantic AI messages from an explicit provider-bound context projection, initially without compaction, and bound large file, history, and analytical Python returns before they enter replayed conversation history.
+34. Persist each complete provider-valid deliberation boundary before another model request, retry only transient OpenAI failures under harness-owned exponential policy, and record every failed attempt without exposing retry budgets to the agent.
+35. Restart a failed run into an explicit child Session by exactly replaying every confirmed parent action in a fresh ARC environment before inheriting the parent Timeline, conversation, synthesis artifacts, snapshots, and UTF-8 workspace. Refuse uncertain actions and replay divergence.
 
-JSON-over-stdio transport and human-readable event projections remain the next layer over this journal. Competition submission integration, score reconstruction, candidate-model archives, and explicit process resume remain later milestones. The current loop deliberately requires a new empty Session.
+JSON-over-stdio transport and human-readable event projections remain the next layer over this journal. Competition submission integration, score reconstruction, candidate-model archives, and exact reconnection to an existing live ARC environment remain later milestones. Fresh runs require a new empty Session; replay-restarted children require validated inherited state.
 
 The next implementation work moves the remaining agent/history defaults into typed configuration. See [Configuration direction](configuration.md) for those remaining policy values.

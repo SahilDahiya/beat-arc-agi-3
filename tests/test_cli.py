@@ -67,6 +67,63 @@ def test_run_command_builds_and_executes_process_config(
     )
 
 
+def test_restart_command_builds_and_executes_replay_process(
+    monkeypatch, capsys
+) -> None:
+    settings = object()
+    captured: dict[str, object] = {}
+    result = LoopResult(
+        stop_reason="max_turns",
+        turns=2,
+        actions=3,
+        observation=GameObservation(
+            game_id="ls20-version",
+            grid=((0,),),
+            state=GameState.NOT_FINISHED,
+            levels_completed=1,
+            win_levels=7,
+            available_actions=(1,),
+        ),
+    )
+
+    async def record_restart_process(*, settings, config):
+        captured["settings"] = settings
+        captured["config"] = config
+        return result
+
+    monkeypatch.setattr(cli, "Settings", lambda: settings)
+    monkeypatch.setattr(cli, "restart_process", record_restart_process)
+
+    exit_code = cli.main(
+        [
+            "restart",
+            "--from-session",
+            "failed-parent",
+            "--session",
+            "ls20-restart-001",
+            "--mode",
+            "online",
+            "--max-turns",
+            "20",
+            "--max-actions",
+            "80",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["settings"] is settings
+    config = captured["config"]
+    assert config.parent_session_id == "failed-parent"
+    assert config.session_label == "ls20-restart-001"
+    assert config.operation_mode is OperationMode.ONLINE
+    assert config.max_turns == 20
+    assert config.max_actions == 80
+    assert capsys.readouterr().out == (
+        f"session={config.session_id} parent=failed-parent "
+        "stop=max_turns turns=2 actions=3 state=NOT_FINISHED levels=1/7\n"
+    )
+
+
 def test_auth_login_waits_for_callback_and_saves_credentials(
     monkeypatch,
     capsys,

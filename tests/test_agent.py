@@ -1,8 +1,10 @@
 import asyncio
 from dataclasses import dataclass, field
 
+import httpx
 import pytest
 from arcengine import FrameData, GameState
+from openai import APIError
 from pydantic import SecretStr
 from pydantic_ai import (
     ModelMessage,
@@ -21,7 +23,11 @@ from beat_arc_agi_3.config import Settings
 from beat_arc_agi_3.dependencies import AgentDeps, HistoryQuery
 from beat_arc_agi_3.events import ArcEvent
 from beat_arc_agi_3.oauth_store import OpenAICodexCredentials
-from beat_arc_agi_3.runner import deliberate, render_observation
+from beat_arc_agi_3.runner import (
+    DeliberationRetryPolicy,
+    deliberate,
+    render_observation,
+)
 from beat_arc_agi_3.schemas import ArcAction, CommitActions, GameObservation
 from beat_arc_agi_3.synthesis import (
     BacktestReport,
@@ -243,6 +249,7 @@ def test_configured_model_uses_gpt_5_5_with_oauth_credentials(
     assert model._provider.client.default_headers["originator"] == (
         "beat-arc-agi-3"
     )
+    assert model._provider.client.max_retries == 0
     assert model.settings == {"openai_store": False}
 
 
@@ -340,10 +347,113 @@ def test_agent_reads_history_then_returns_typed_commit() -> None:
     assert len(conversation.messages()) == 5
     assert [event.type for _, event in events.recorded] == [
         "deliberation_started",
+        "deliberation_checkpointed",
         "tool_started",
         "tool_completed",
+        "deliberation_checkpointed",
+        "deliberation_checkpointed",
         "commit_accepted",
     ]
+
+
+def test_deliberation_retries_from_latest_complete_checkpoint() -> None:
+    workspace = RecordingWorkspace()
+    events = RecordingEvents()
+    calls = 0
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return ModelResponse(
+                parts=[ToolCallPart("read_file", {"path": "notes.md"})]
+            )
+        if calls == 2:
+            raise APIError(
+                "stream failed; you can retry your request",
+                request=httpx.Request("POST", "https://example.test"),
+                body={"type": "server_error", "code": "server_error"},
+            )
+        return ModelResponse(
+            parts=[ToolCallPart("commit_actions", commit_args())]
+        )
+
+    conversation = MemoryConversation()
+    result = asyncio.run(
+        deliberate(
+            build_agent(FunctionModel(model)),
+            AgentDeps(
+                observation=observation(1),
+                history=RecordingHistory(),
+                workspace=workspace,
+                synthesis=RecordingSynthesis(),
+                events=events,
+                turn=1,
+            ),
+            conversation,
+            retry_policy=DeliberationRetryPolicy(
+                max_retries=1,
+                base_delay_seconds=0,
+            ),
+        )
+    )
+
+    assert result.actions[0].action == "ACTION1"
+    assert calls == 3
+    assert len(workspace.read_calls) == 1
+    assert len(conversation.messages()) == 5
+    assert sum(
+        isinstance(part, UserPromptPart)
+        for message in conversation.messages()
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+    ) == 1
+    failures = [
+        event
+        for _, event in events.recorded
+        if event.type == "deliberation_attempt_failed"
+    ]
+    assert len(failures) == 1
+    assert failures[0].attempt == 1
+    assert failures[0].will_retry is True
+
+
+def test_deliberation_resumes_a_durable_pending_request_without_new_prompt() -> None:
+    pending = ModelRequest(parts=[UserPromptPart("pending failed turn")])
+    conversation = MemoryConversation(recorded=[pending])
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        prompts = [
+            part
+            for message in messages
+            if isinstance(message, ModelRequest)
+            for part in message.parts
+            if isinstance(part, UserPromptPart)
+        ]
+        assert len(prompts) == 1
+        assert prompts[0].content == "pending failed turn"
+        return ModelResponse(
+            parts=[ToolCallPart("commit_actions", commit_args())]
+        )
+
+    result = asyncio.run(
+        deliberate(
+            build_agent(FunctionModel(model)),
+            AgentDeps(
+                observation=observation(1),
+                history=RecordingHistory(),
+                workspace=RecordingWorkspace(),
+                synthesis=RecordingSynthesis(),
+                events=RecordingEvents(),
+                turn=1,
+            ),
+            conversation,
+            resume_from_checkpoint=True,
+        )
+    )
+
+    assert result.actions[0].action == "ACTION1"
+    assert len(conversation.messages()) == 3
 
 
 def test_agent_records_structured_bfs_outcome_before_tool_completion() -> None:
@@ -387,12 +497,15 @@ def test_agent_records_structured_bfs_outcome_before_tool_completion() -> None:
     event_types = [event.type for _, event in events.recorded]
     assert event_types == [
         "deliberation_started",
+        "deliberation_checkpointed",
         "tool_started",
         "bfs_completed",
         "tool_completed",
+        "deliberation_checkpointed",
+        "deliberation_checkpointed",
         "commit_accepted",
     ]
-    bfs = events.recorded[2][1]
+    bfs = events.recorded[3][1]
     assert bfs.target == "level_up"
     assert bfs.status == "found"
     assert bfs.max_depth == 8

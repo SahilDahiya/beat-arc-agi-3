@@ -38,9 +38,26 @@ uv run python -m beat_arc_agi_3 run \
   --mode online
 ```
 
-The command uses ChatGPT subscription model access and performs real ARC actions. `--session` is a reusable label; each run prefixes it with a UTC timestamp and writes a distinct directory such as `sessions/20260718T153012.123456Z-ls20-experiment-001/`. Process resume is not implemented yet.
+The command uses ChatGPT subscription model access and performs real ARC actions. `--session` is a reusable label; each run prefixes it with a UTC timestamp and writes a distinct directory such as `sessions/20260718T153012.123456Z-ls20-experiment-001/`.
 
 For a private diagnostic run, the harness operator may add positive `--max-turns` and/or `--max-actions` caps. These caps are enforced by the outer loop and are never included in agent dependencies or prompts.
+
+If a model request exhausts its harness-owned transient retries, restart from
+the durable Session into a new timestamped child:
+
+```bash
+uv run python -m beat_arc_agi_3 restart \
+  --from-session 20260720T015311.060076Z-ls20-world-model-001 \
+  --session ls20-restart-001 \
+  --mode online
+```
+
+Restart performs real ARC actions: it creates a fresh environment and replays
+every confirmed parent action, comparing every observation exactly. It refuses
+an uncertain action or any replay divergence. Only after replay succeeds does
+it create the child and continue from the persisted conversation, Timeline,
+notes, world model, snapshots, and other UTF-8 working files. This is
+restart-by-replay, not reconnection to the original live ARC process.
 
 ## Run the Session-evidence regression
 

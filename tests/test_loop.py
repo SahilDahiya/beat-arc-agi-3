@@ -160,9 +160,12 @@ def test_loop_drops_queue_suffix_on_level_up_and_reasons_again(
         "session_started",
         "turn_started",
         "deliberation_started",
+        "deliberation_checkpointed",
         "tool_started",
         "backtest_completed",
         "tool_completed",
+        "deliberation_checkpointed",
+        "deliberation_checkpointed",
         "commit_accepted",
         "action_started",
         "action_completed",
@@ -171,9 +174,12 @@ def test_loop_drops_queue_suffix_on_level_up_and_reasons_again(
         "turn_completed",
         "turn_started",
         "deliberation_started",
+        "deliberation_checkpointed",
         "tool_started",
         "backtest_completed",
         "tool_completed",
+        "deliberation_checkpointed",
+        "deliberation_checkpointed",
         "commit_accepted",
         "action_started",
         "action_completed",
@@ -532,7 +538,11 @@ def test_loop_persists_interruption_after_action_started(tmp_path: Path) -> None
                 adapter=adapter,
                 initial_observation=adapter.reset(),
                 session=session,
-                policy=LoopPolicy(max_turns=1, max_actions=1),
+                policy=LoopPolicy(
+                    max_turns=1,
+                    max_actions=1,
+                    max_deliberation_retries=0,
+                ),
             )
         )
 
@@ -566,7 +576,11 @@ def test_loop_persists_deliberation_failure_on_the_active_turn(
                 adapter=adapter,
                 initial_observation=adapter.reset(),
                 session=session,
-                policy=LoopPolicy(max_turns=1, max_actions=1),
+                policy=LoopPolicy(
+                    max_turns=1,
+                    max_actions=1,
+                    max_deliberation_retries=0,
+                ),
             )
         )
 
@@ -611,7 +625,11 @@ def test_loop_persists_compact_openai_error_details(tmp_path: Path) -> None:
                 adapter=adapter,
                 initial_observation=adapter.reset(),
                 session=session,
-                policy=LoopPolicy(max_turns=1, max_actions=1),
+                policy=LoopPolicy(
+                    max_turns=1,
+                    max_actions=1,
+                    max_deliberation_retries=0,
+                ),
             )
         )
 
@@ -625,3 +643,90 @@ def test_loop_persists_compact_openai_error_details(tmp_path: Path) -> None:
     assert '"detail":"backend stream terminated"' in terminal.event.message
     assert "Bearer secret" not in terminal.event.message
     assert "authorization" not in terminal.event.message
+
+
+def test_loop_records_every_exhausted_transient_attempt(tmp_path: Path) -> None:
+    environment = FakeEnvironment([])
+    calls = 0
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        nonlocal calls
+        calls += 1
+        raise APIError(
+            "stream failed; you can retry your request",
+            request=httpx.Request("POST", "https://example.test"),
+            body={"type": "server_error", "code": "server_error"},
+        )
+
+    session = Session.create(
+        sessions_root=tmp_path,
+        session_id="run-001",
+        game_id="test-game",
+        model="test:model",
+    )
+    adapter = ArcGameAdapter(environment)
+
+    with pytest.raises(APIError, match="stream failed"):
+        asyncio.run(
+            run_agent_loop(
+                agent=build_agent(FunctionModel(model)),
+                adapter=adapter,
+                initial_observation=adapter.reset(),
+                session=session,
+                policy=LoopPolicy(
+                    max_turns=1,
+                    max_actions=1,
+                    max_deliberation_retries=2,
+                    retry_base_delay_seconds=0,
+                ),
+            )
+        )
+
+    assert calls == 3
+    assert [
+        entry.event.attempt
+        for entry in session.events.entries()
+        if entry.event.type == "deliberation_attempt_failed"
+    ] == [1, 2, 3]
+    assert session.events.entries()[-1].event.type == "run_failed"
+
+
+def test_loop_does_not_retry_quota_failures(tmp_path: Path) -> None:
+    environment = FakeEnvironment([])
+    calls = 0
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        nonlocal calls
+        calls += 1
+        raise APIError(
+            "insufficient quota; you can retry your request",
+            request=httpx.Request("POST", "https://example.test"),
+            body={"type": "insufficient_quota", "code": "insufficient_quota"},
+        )
+
+    session = Session.create(
+        sessions_root=tmp_path,
+        session_id="run-001",
+        game_id="test-game",
+        model="test:model",
+    )
+    adapter = ArcGameAdapter(environment)
+
+    with pytest.raises(APIError, match="insufficient quota"):
+        asyncio.run(
+            run_agent_loop(
+                agent=build_agent(FunctionModel(model)),
+                adapter=adapter,
+                initial_observation=adapter.reset(),
+                session=session,
+                policy=LoopPolicy(
+                    max_deliberation_retries=2,
+                    retry_base_delay_seconds=0,
+                ),
+            )
+        )
+
+    assert calls == 1
+    failed_attempt = session.events.entries()[-2].event
+    assert failed_attempt.type == "deliberation_attempt_failed"
+    assert failed_attempt.will_retry is False

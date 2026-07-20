@@ -22,7 +22,7 @@ from beat_arc_agi_3.events import (
     WorldModelSnapshottedEvent,
 )
 from beat_arc_agi_3.history import TimelineHistoryReader
-from beat_arc_agi_3.runner import deliberate
+from beat_arc_agi_3.runner import DeliberationRetryPolicy, deliberate
 from beat_arc_agi_3.schemas import CommitActions, GameObservation
 from beat_arc_agi_3.session import Session
 from beat_arc_agi_3.strategy import render_strategy_context
@@ -39,6 +39,8 @@ class LoopPolicy(BaseModel):
 
     max_turns: int | None = Field(default=None, ge=1)
     max_actions: int | None = Field(default=None, ge=1)
+    max_deliberation_retries: int = Field(default=3, ge=0)
+    retry_base_delay_seconds: float = Field(default=2.0, ge=0)
 
 
 class LoopResult(BaseModel):
@@ -85,24 +87,45 @@ async def run_agent_loop(
 ) -> LoopResult:
     """Observe, deliberate, execute, and record with optional private caps."""
 
-    if session.timeline.initial_observation is not None:
-        raise ValueError("agent loop requires a new, uninitialized session")
-    if session.conversation.messages():
-        raise ValueError("agent loop requires an empty session conversation")
-
     current = initial_observation
     if current.game_id != session.metadata.game_id:
         raise ValueError(
             f"environment game {current.game_id} does not match "
             f"session game {session.metadata.game_id}"
         )
-    session.timeline.initialize(current)
+    if session.metadata.origin == "fresh":
+        if session.timeline.initial_observation is not None:
+            raise ValueError(
+                "fresh agent loop requires an uninitialized Timeline"
+            )
+        if session.conversation.messages():
+            raise ValueError("fresh agent loop requires an empty conversation")
+        session.timeline.initialize(current)
+        turn_context = "This is the initial observation for the session."
+    else:
+        transitions = session.timeline.transitions()
+        checkpoint = (
+            transitions[-1].after
+            if transitions
+            else session.timeline.initial_observation
+        )
+        if checkpoint is None or checkpoint != current:
+            raise ValueError(
+                "restart observation does not match replayed Timeline tail"
+            )
+        if not session.conversation.messages():
+            raise ValueError("restart requires the inherited conversation")
+        turn_context = (
+            f"This Session restarted from "
+            f"{session.metadata.parent_session_id} after deterministic replay "
+            f"of {session.metadata.replayed_transitions} transition(s)."
+        )
 
     turns = 0
     active_turn = 0
     actions_taken = 0
     turn_context = (
-        "This is the initial observation for the session.\n"
+        f"{turn_context}\n"
         f"{render_strategy_context(session.timeline, session.events)}"
     )
     history = TimelineHistoryReader(session.timeline)
@@ -170,6 +193,14 @@ async def run_agent_loop(
                 ),
                 session.conversation,
                 turn_context=turn_context,
+                retry_policy=DeliberationRetryPolicy(
+                    max_retries=policy.max_deliberation_retries,
+                    base_delay_seconds=policy.retry_base_delay_seconds,
+                ),
+                resume_from_checkpoint=(
+                    turns == 0
+                    and session.metadata.resumes_pending_deliberation
+                ),
             )
             turns = turn_number
             committed_count = len(commit.actions)

@@ -23,7 +23,12 @@ from beat_arc_agi_3.oauth_store import (
     get_openai_codex_credentials,
     set_openai_codex_credentials,
 )
-from beat_arc_agi_3.process import ProcessConfig, run_process
+from beat_arc_agi_3.process import (
+    ProcessConfig,
+    RestartProcessConfig,
+    restart_process,
+    run_process,
+)
 from beat_arc_agi_3.session import Session
 
 
@@ -41,6 +46,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument("--max-turns", type=int)
     run_parser.add_argument("--max-actions", type=int)
+    run_parser.add_argument("--max-deliberation-retries", type=int, default=3)
+    run_parser.add_argument("--retry-base-delay-seconds", type=float, default=2.0)
+
+    restart_parser = subparsers.add_parser(
+        "restart",
+        help="replay a Session exactly and continue in a new child Session",
+    )
+    restart_parser.add_argument("--from-session", required=True)
+    restart_parser.add_argument("--session", required=True)
+    restart_parser.add_argument(
+        "--mode",
+        required=True,
+        choices=[mode.value for mode in OperationMode],
+    )
+    restart_parser.add_argument("--max-turns", type=int)
+    restart_parser.add_argument("--max-actions", type=int)
+    restart_parser.add_argument(
+        "--max-deliberation-retries", type=int, default=3
+    )
+    restart_parser.add_argument(
+        "--retry-base-delay-seconds", type=float, default=2.0
+    )
 
     eval_parser = subparsers.add_parser(
         "eval",
@@ -145,6 +172,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         report.print(width=160, include_reasons=True)
         return 0 if report_passed(report) else 1
 
+    if args.command == "restart":
+        config = RestartProcessConfig(
+            parent_session_id=args.from_session,
+            session_label=args.session,
+            started_at=datetime.now(UTC),
+            operation_mode=OperationMode(args.mode),
+            max_turns=args.max_turns,
+            max_actions=args.max_actions,
+            max_deliberation_retries=args.max_deliberation_retries,
+            retry_base_delay_seconds=args.retry_base_delay_seconds,
+        )
+        result = asyncio.run(
+            restart_process(settings=Settings(), config=config)
+        )
+        observation = result.observation
+        print(
+            f"session={config.session_id} "
+            f"parent={config.parent_session_id} "
+            f"stop={result.stop_reason} turns={result.turns} "
+            f"actions={result.actions} state={observation.state.value} "
+            f"levels={observation.levels_completed}/{observation.win_levels}"
+        )
+        return 0
+
     if args.command != "run":
         raise RuntimeError(f"unsupported command: {args.command}")
 
@@ -155,6 +206,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         operation_mode=OperationMode(args.mode),
         max_turns=args.max_turns,
         max_actions=args.max_actions,
+        max_deliberation_retries=args.max_deliberation_retries,
+        retry_base_delay_seconds=args.retry_base_delay_seconds,
     )
     result = asyncio.run(run_process(settings=Settings(), config=config))
     observation = result.observation

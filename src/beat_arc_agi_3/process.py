@@ -8,6 +8,7 @@ from beat_arc_agi_3.adapter import ArcGameAdapter
 from beat_arc_agi_3.agent import build_agent, build_openai_model
 from beat_arc_agi_3.config import Settings
 from beat_arc_agi_3.loop import LoopPolicy, LoopResult, run_agent_loop
+from beat_arc_agi_3.restart import create_restarted_session, replay_session
 from beat_arc_agi_3.schemas import GameObservation
 from beat_arc_agi_3.session import Session
 
@@ -33,6 +34,8 @@ class ProcessConfig(BaseModel):
     operation_mode: OperationMode
     max_turns: int | None = Field(default=None, ge=1)
     max_actions: int | None = Field(default=None, ge=1)
+    max_deliberation_retries: int = Field(default=3, ge=0)
+    retry_base_delay_seconds: float = Field(default=2.0, ge=0)
 
     @property
     def session_id(self) -> str:
@@ -69,6 +72,9 @@ async def run_process(*, settings: Settings, config: ProcessConfig) -> LoopResul
         session_id=config.session_id,
         game_id=environment.info.game_id,
         model=settings.pydantic_ai_model,
+        operation_mode=config.operation_mode.value,
+        environment_guid=initial_frame.guid,
+        scorecard_id=environment.scorecard_id,
     )
     model = build_openai_model(settings)
     agent = build_agent(model)
@@ -80,5 +86,87 @@ async def run_process(*, settings: Settings, config: ProcessConfig) -> LoopResul
         policy=LoopPolicy(
             max_turns=config.max_turns,
             max_actions=config.max_actions,
+            max_deliberation_retries=config.max_deliberation_retries,
+            retry_base_delay_seconds=config.retry_base_delay_seconds,
+        ),
+    )
+
+
+class RestartProcessConfig(BaseModel):
+    """Explicit parent lineage, environment, and private restart bounds."""
+
+    model_config = ConfigDict(frozen=True)
+
+    parent_session_id: str = Field(min_length=1)
+    session_label: SessionLabel
+    started_at: AwareDatetime
+    operation_mode: OperationMode
+    max_turns: int | None = Field(default=None, ge=1)
+    max_actions: int | None = Field(default=None, ge=1)
+    max_deliberation_retries: int = Field(default=3, ge=0)
+    retry_base_delay_seconds: float = Field(default=2.0, ge=0)
+
+    @property
+    def session_id(self) -> str:
+        timestamp = self.started_at.astimezone(UTC).strftime(
+            "%Y%m%dT%H%M%S.%fZ"
+        )
+        return f"{timestamp}-{self.session_label}"
+
+
+async def restart_process(
+    *,
+    settings: Settings,
+    config: RestartProcessConfig,
+) -> LoopResult:
+    """Rebuild a parent state by exact replay, then continue in a child."""
+
+    agent = build_agent(build_openai_model(settings))
+    parent = Session.open(
+        sessions_root=settings.sessions_root,
+        session_id=config.parent_session_id,
+    )
+    arcade = Arcade(
+        arc_api_key=settings.arc_api_key.get_secret_value(),
+        operation_mode=config.operation_mode,
+    )
+    environment = arcade.make(parent.metadata.game_id)
+    if environment is None:
+        raise RuntimeError(
+            f"Arcade could not create environment {parent.metadata.game_id!r} "
+            f"in {config.operation_mode.value!r} mode"
+        )
+    initial_frame = environment.observation_space
+    if initial_frame is None:
+        raise RuntimeError(
+            f"Arcade environment {environment.info.game_id!r} has no initial "
+            "observation after creation"
+        )
+    adapter = ArcGameAdapter(environment)
+    checkpoint = replay_session(
+        parent=parent,
+        adapter=adapter,
+        initial_observation=GameObservation.from_frame(initial_frame),
+    )
+    child = create_restarted_session(
+        parent=parent,
+        sessions_root=settings.sessions_root,
+        session_id=config.session_id,
+        model=settings.pydantic_ai_model,
+        checkpoint=checkpoint,
+        operation_mode=config.operation_mode.value,
+        environment_guid=initial_frame.guid,
+        scorecard_id=environment.scorecard_id,
+    )
+    return await run_agent_loop(
+        agent=agent,
+        adapter=adapter,
+        initial_observation=checkpoint,
+        session=child,
+        policy=LoopPolicy(
+            max_turns=config.max_turns,
+            max_actions=config.max_actions,
+            max_deliberation_retries=config.max_deliberation_retries,
+            retry_base_delay_seconds=config.retry_base_delay_seconds,
         ),
     )
