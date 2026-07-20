@@ -2,7 +2,7 @@ import hashlib
 from pathlib import Path
 
 import pytest
-from pydantic_ai import ModelRequest, UserPromptPart
+from pydantic_ai import ModelRequest, ModelResponse, TextPart, UserPromptPart
 
 from beat_arc_agi_3.events import WorldModelSnapshottedEvent
 from beat_arc_agi_3.session import (
@@ -89,6 +89,78 @@ def test_session_reopens_persisted_agent_messages(tmp_path: Path) -> None:
     reopened = Session.open(sessions_root=tmp_path, session_id="run-001")
 
     assert reopened.conversation.messages() == (message,)
+
+
+def test_conversation_persists_identical_instructions_only_once(
+    tmp_path: Path,
+) -> None:
+    session = Session.create(
+        sessions_root=tmp_path,
+        session_id="run-001",
+        game_id="test-game",
+        model="openai-codex:gpt-5.5",
+    )
+    first_request = ModelRequest(
+        parts=[UserPromptPart("first request")],
+        instructions="solve the game",
+    )
+    tool_followup = ModelRequest(
+        parts=[UserPromptPart("tool followup")],
+        instructions="solve the game",
+    )
+    later_turn = ModelRequest(
+        parts=[UserPromptPart("later turn")],
+        instructions="solve the game",
+    )
+
+    session.conversation.append(
+        [first_request, ModelResponse(parts=[TextPart("working")]), tool_followup]
+    )
+    session.conversation.append([later_turn])
+
+    persisted = Session.open(
+        sessions_root=tmp_path,
+        session_id="run-001",
+    ).conversation.messages()
+    requests = [message for message in persisted if isinstance(message, ModelRequest)]
+    assert [request.instructions for request in requests] == [
+        "solve the game",
+        None,
+        None,
+    ]
+    assert [request.parts for request in requests] == [
+        first_request.parts,
+        tool_followup.parts,
+        later_turn.parts,
+    ]
+    assert tool_followup.instructions == "solve the game"
+    assert later_turn.instructions == "solve the game"
+
+
+def test_conversation_retains_changed_instructions(tmp_path: Path) -> None:
+    session = Session.create(
+        sessions_root=tmp_path,
+        session_id="run-001",
+        game_id="test-game",
+        model="openai-codex:gpt-5.5",
+    )
+
+    session.conversation.append(
+        [
+            ModelRequest(parts=[UserPromptPart("first")], instructions="version one"),
+            ModelRequest(parts=[UserPromptPart("second")], instructions="version two"),
+        ]
+    )
+
+    requests = [
+        message
+        for message in session.conversation.messages()
+        if isinstance(message, ModelRequest)
+    ]
+    assert [request.instructions for request in requests] == [
+        "version one",
+        "version two",
+    ]
 
 
 def test_session_create_fails_when_the_session_exists(tmp_path: Path) -> None:

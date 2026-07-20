@@ -1,9 +1,10 @@
 import os
+from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
 
 from pydantic import ValidationError
-from pydantic_ai import ModelMessage, ModelMessagesTypeAdapter
+from pydantic_ai import ModelMessage, ModelMessagesTypeAdapter, ModelRequest
 
 
 class ConversationError(RuntimeError):
@@ -46,7 +47,7 @@ class JsonlConversation:
         return tuple(self._messages)
 
     def append(self, messages: Sequence[ModelMessage]) -> None:
-        batch = list(messages)
+        batch = self._deduplicate_instructions(messages)
         if not batch:
             raise ValueError("conversation message batch cannot be empty")
         payload = ModelMessagesTypeAdapter.dump_json(batch).decode("utf-8")
@@ -60,6 +61,26 @@ class JsonlConversation:
                 f"conversation does not exist: {self.path}"
             ) from exc
         self._messages.extend(batch)
+
+    def _deduplicate_instructions(
+        self, messages: Sequence[ModelMessage]
+    ) -> list[ModelMessage]:
+        seen = {
+            message.instructions
+            for message in self._messages
+            if isinstance(message, ModelRequest) and message.instructions is not None
+        }
+        deduplicated: list[ModelMessage] = []
+        for message in messages:
+            if not isinstance(message, ModelRequest) or message.instructions is None:
+                deduplicated.append(message)
+                continue
+            if message.instructions in seen:
+                deduplicated.append(replace(message, instructions=None))
+                continue
+            seen.add(message.instructions)
+            deduplicated.append(message)
+        return deduplicated
 
     def _load(self) -> list[ModelMessage]:
         messages: list[ModelMessage] = []
