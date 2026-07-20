@@ -57,7 +57,9 @@ uncertain action or any replay divergence. After replay succeeds, it appends an
 environment-attempt event and continues the existing conversation, Timeline,
 notes, world model, snapshots, turn numbers, and action numbers in the same
 Session directory. This is restart-by-replay, not reconnection to the original
-live ARC process.
+live ARC process. The exact pending model request is resumed only when the event
+journal proves a matching durable checkpoint. Otherwise restart begins a fresh
+deliberation from the replayed current observation.
 
 ## Run the Session-evidence regression
 

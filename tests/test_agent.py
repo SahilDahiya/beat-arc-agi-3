@@ -418,6 +418,51 @@ def test_deliberation_retries_from_latest_complete_checkpoint() -> None:
     assert failures[0].will_retry is True
 
 
+def test_deliberation_retries_a_remote_protocol_error() -> None:
+    calls = 0
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise httpx.RemoteProtocolError(
+                "peer closed connection without a complete body"
+            )
+        return ModelResponse(
+            parts=[ToolCallPart("commit_actions", commit_args())]
+        )
+
+    events = RecordingEvents()
+    result = asyncio.run(
+        deliberate(
+            build_agent(FunctionModel(model)),
+            AgentDeps(
+                observation=observation(1),
+                history=RecordingHistory(),
+                workspace=RecordingWorkspace(),
+                synthesis=RecordingSynthesis(),
+                events=events,
+                turn=1,
+            ),
+            MemoryConversation(),
+            retry_policy=DeliberationRetryPolicy(
+                max_retries=1,
+                base_delay_seconds=0,
+            ),
+        )
+    )
+
+    assert result.actions[0].action == "ACTION1"
+    assert calls == 2
+    failures = [
+        event
+        for _, event in events.recorded
+        if event.type == "deliberation_attempt_failed"
+    ]
+    assert len(failures) == 1
+    assert failures[0].will_retry is True
+
+
 def test_deliberation_resumes_a_durable_pending_request_without_new_prompt() -> None:
     pending = ModelRequest(parts=[UserPromptPart("pending failed turn")])
     conversation = MemoryConversation(recorded=[pending])
@@ -454,6 +499,47 @@ def test_deliberation_resumes_a_durable_pending_request_without_new_prompt() -> 
 
     assert result.actions[0].action == "ACTION1"
     assert len(conversation.messages()) == 3
+
+
+def test_deliberation_uses_a_fresh_prompt_without_a_resume_checkpoint() -> None:
+    conversation = MemoryConversation(
+        recorded=[ModelRequest(parts=[UserPromptPart("older completed turn")])]
+    )
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        prompts = [
+            part
+            for message in messages
+            if isinstance(message, ModelRequest)
+            for part in message.parts
+            if isinstance(part, UserPromptPart)
+        ]
+        assert len(prompts) == 2
+        assert prompts[0].content == "older completed turn"
+        assert "Choose the next action queue" in prompts[1].content
+        assert "State: NOT_FINISHED | level 0/0" in prompts[1].content
+        return ModelResponse(
+            parts=[ToolCallPart("commit_actions", commit_args())]
+        )
+
+    result = asyncio.run(
+        deliberate(
+            build_agent(FunctionModel(model)),
+            AgentDeps(
+                observation=observation(1),
+                history=RecordingHistory(),
+                workspace=RecordingWorkspace(),
+                synthesis=RecordingSynthesis(),
+                events=RecordingEvents(),
+                turn=2,
+            ),
+            conversation,
+            resume_from_checkpoint=False,
+        )
+    )
+
+    assert result.actions[0].action == "ACTION1"
+    assert len(conversation.messages()) == 4
 
 
 def test_agent_records_structured_bfs_outcome_before_tool_completion() -> None:

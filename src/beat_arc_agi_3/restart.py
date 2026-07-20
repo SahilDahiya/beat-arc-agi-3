@@ -2,7 +2,11 @@ from arcengine import GameState
 from pydantic_ai import ModelRequest
 
 from beat_arc_agi_3.adapter import ArcGameAdapter
-from beat_arc_agi_3.events import ActionCompletedEvent, ActionStartedEvent
+from beat_arc_agi_3.events import (
+    ActionCompletedEvent,
+    ActionStartedEvent,
+    DeliberationCheckpointedEvent,
+)
 from beat_arc_agi_3.schemas import GameObservation
 from beat_arc_agi_3.session import Session
 
@@ -22,17 +26,35 @@ class ReplayDivergenceError(RestartError):
 def resumes_pending_deliberation(session: Session) -> bool:
     """Return whether restart should continue a saved model request."""
 
-    last_started = 0
+    entries = session.events.entries()
+    last_started = None
     last_commit = 0
-    for entry in session.events.entries():
+    for entry in entries:
         if entry.event.type == "deliberation_started":
-            last_started = entry.seq
+            last_started = entry
         elif entry.event.type == "commit_accepted":
             last_commit = entry.seq
-    pending = last_started > last_commit
-    if not pending:
+    if last_started is None or last_started.seq <= last_commit:
+        return False
+    checkpoints = tuple(
+        entry
+        for entry in entries
+        if entry.seq > last_started.seq
+        and isinstance(entry.event, DeliberationCheckpointedEvent)
+    )
+    if not checkpoints:
         return False
     messages = session.conversation.messages()
+    checkpoint = checkpoints[-1]
+    if checkpoint.turn != last_started.turn:
+        raise RestartUnsafeError(
+            "pending deliberation checkpoint belongs to a different turn"
+        )
+    if checkpoint.event.total_messages != len(messages):
+        raise RestartUnsafeError(
+            "pending deliberation checkpoint message count does not match "
+            "the durable conversation"
+        )
     if (
         not messages
         or not isinstance(messages[-1], ModelRequest)

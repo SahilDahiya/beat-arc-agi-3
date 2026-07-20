@@ -13,6 +13,7 @@ from beat_arc_agi_3.adapter import ArcGameAdapter
 from beat_arc_agi_3.agent import build_agent
 from beat_arc_agi_3.events import (
     ActionStartedEvent,
+    DeliberationCheckpointedEvent,
     DeliberationStartedEvent,
     EnvironmentRestartedEvent,
 )
@@ -190,8 +191,66 @@ def test_restart_detects_a_provider_valid_pending_deliberation(
         turn=3,
         event=DeliberationStartedEvent(summary="pending deliberation"),
     )
+    session.events.append(
+        turn=3,
+        event=DeliberationCheckpointedEvent(
+            summary="persisted pending request",
+            attempt=1,
+            messages_added=1,
+            total_messages=1,
+        ),
+    )
 
     assert resumes_pending_deliberation(session) is True
+
+
+def test_restart_does_not_resume_a_request_from_an_older_turn(
+    tmp_path: Path,
+) -> None:
+    session = parent_session(tmp_path)
+    session.conversation.append([ModelRequest(parts=[])])
+    session.events.append(
+        turn=2,
+        event=DeliberationStartedEvent(summary="older deliberation"),
+    )
+    session.events.append(
+        turn=2,
+        event=DeliberationCheckpointedEvent(
+            summary="persisted older request",
+            attempt=1,
+            messages_added=1,
+            total_messages=1,
+        ),
+    )
+    session.events.append(
+        turn=3,
+        event=DeliberationStartedEvent(summary="uncheckpointed deliberation"),
+    )
+
+    assert resumes_pending_deliberation(session) is False
+
+
+def test_restart_rejects_a_checkpoint_with_the_wrong_message_count(
+    tmp_path: Path,
+) -> None:
+    session = parent_session(tmp_path)
+    session.conversation.append([ModelRequest(parts=[])])
+    session.events.append(
+        turn=3,
+        event=DeliberationStartedEvent(summary="pending deliberation"),
+    )
+    session.events.append(
+        turn=3,
+        event=DeliberationCheckpointedEvent(
+            summary="mismatched pending request",
+            attempt=1,
+            messages_added=1,
+            total_messages=2,
+        ),
+    )
+
+    with pytest.raises(RestartUnsafeError, match="message count"):
+        resumes_pending_deliberation(session)
 
 
 def test_restarted_loop_continues_same_timeline_and_global_numbering(

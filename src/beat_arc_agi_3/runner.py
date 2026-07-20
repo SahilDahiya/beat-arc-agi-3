@@ -1,6 +1,7 @@
 import asyncio
 from typing import Protocol, Sequence
 
+from httpx import TransportError
 from openai import APIError
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import (
@@ -57,6 +58,8 @@ class DeliberationRetryPolicy(BaseModel):
 
 
 def _is_retryable_model_error(exc: Exception) -> bool:
+    if isinstance(exc, TransportError):
+        return True
     if not isinstance(exc, APIError):
         return False
 
