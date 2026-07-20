@@ -4,6 +4,7 @@ from collections.abc import Awaitable, Callable
 from time import perf_counter
 from typing import Literal, TypeVar
 
+from arcengine import GameState
 from openai import AsyncOpenAI
 from pydantic_ai import Agent, ModelRetry, RunContext, ToolOutput
 from pydantic_ai.models import Model
@@ -164,6 +165,9 @@ commit a bounded probe that separates the selected hypothesis from its nearest
 competitor. BFS EXHAUSTED refutes reachability only under that exact revision,
 predicate, action candidates, depth, and node budget; it is not proof that the
 real level has no solution.
+When the observation state is GAME_OVER, commit exactly one RESET without
+run_bfs. Record the resulting real reset transition before inferring what state
+or resources RESET restores; do not synthesize a reset route from assumption.
 When ready, call commit_actions with a non-empty ordered queue, the reason for
 the queue, and a suggestion for the next deliberation turn. A green current
 revision permits a prediction-guarded multi-action queue. Use known modeled
@@ -523,6 +527,13 @@ def build_agent(
             raise ModelRetry(
                 f"Committed unavailable actions {unavailable}; "
                 f"legal actions are {sorted(legal)}"
+            )
+        if (
+            ctx.deps.observation.state is GameState.GAME_OVER
+            and len(output.actions) != 1
+        ):
+            raise ModelRetry(
+                "GAME_OVER requires exactly one explicit RESET action"
             )
         try:
             ctx.deps.synthesis.inspect_model()

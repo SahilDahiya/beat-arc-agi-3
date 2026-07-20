@@ -20,7 +20,7 @@ from beat_arc_agi_3.dependencies import AgentDeps, HistoryQuery
 from beat_arc_agi_3.events import ArcEvent
 from beat_arc_agi_3.oauth_store import OpenAICodexCredentials
 from beat_arc_agi_3.runner import deliberate, render_observation
-from beat_arc_agi_3.schemas import CommitActions, GameObservation
+from beat_arc_agi_3.schemas import ArcAction, CommitActions, GameObservation
 from beat_arc_agi_3.synthesis import (
     BacktestReport,
     BacktestRequiredError,
@@ -55,6 +55,7 @@ def test_agent_instructions_require_revisable_level_entry_grounding() -> None:
     assert "selected hypothesis" in instructions
     assert "competing hypothesis" in instructions
     assert "BFS EXHAUSTED" in instructions
+    assert "GAME_OVER, commit exactly one RESET without run_bfs" in instructions
 
 
 @dataclass
@@ -523,6 +524,56 @@ def test_agent_accepts_only_reset_after_game_over() -> None:
 
     assert attempts == 2
     assert result.actions[0].action == "RESET"
+
+
+def test_agent_rejects_a_multi_reset_queue_after_game_over() -> None:
+    attempts = 0
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        nonlocal attempts
+        attempts += 1
+        actions = (
+            [{"action": "RESET"}, {"action": "RESET"}]
+            if attempts == 1
+            else [{"action": "RESET"}]
+        )
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    "commit_actions",
+                    {
+                        "actions": actions,
+                        "reason": "Reset after death.",
+                        "suggestion": "Inspect restored state.",
+                    },
+                )
+            ]
+        )
+
+    deps = AgentDeps(
+        observation=GameObservation.from_frame(
+            FrameData(
+                game_id="test-game",
+                frame=[[[0]]],
+                state=GameState.GAME_OVER,
+                available_actions=[1, 2, 3, 4],
+            )
+        ),
+        history=RecordingHistory(),
+        workspace=RecordingWorkspace(),
+        synthesis=RecordingSynthesis(),
+        events=RecordingEvents(),
+        turn=1,
+    )
+
+    result = asyncio.run(
+        deliberate(
+            build_agent(FunctionModel(model)), deps, MemoryConversation()
+        )
+    )
+
+    assert attempts == 2
+    assert result.actions == (ArcAction(action="RESET"),)
 
 
 def test_agent_must_create_world_model_before_committing() -> None:

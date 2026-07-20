@@ -69,14 +69,16 @@ uv run python -m beat_arc_agi_3 eval lifecycle --session SESSION_ID
 
 The command emits deterministic JSON and performs no model request or ARC
 action. Each transition is assigned to the level on which its action began.
-For every observed level, the report includes entry and exit transition/turn,
+For every observed level, the report includes entry and exit transition/turn
+and timestamp, observed duration, and completed-stage duration when applicable,
 action and click-coordinate distributions, exact/mismatch/unchecked counts,
 distinct observable states, model installs and backtests, mismatch-to-next-green
-repair spans, structured BFS outcomes, committed queue sizes and cancellations,
+repair spans, structured BFS outcomes, committed and executed queue sizes and cancellations,
 death/reset/progress/win facts, failures/interruption, and tool counts grouped
-into grounding, synthesis, verification, and search according to fixed tool
-contracts. These are process measurements, not success criteria and not an
-inference about the model's private intent.
+by evidence-defined `before_first_action`, `mismatch_repair`, and
+`between_actions` boundaries. These are process measurements, not success
+criteria and not an inference about the model's private intent or a tool's
+semantic purpose.
 
 ## Iterative agent-development loop
 

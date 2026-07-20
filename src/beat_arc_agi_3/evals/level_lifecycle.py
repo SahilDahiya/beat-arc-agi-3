@@ -1,25 +1,14 @@
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, defaultdict
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from beat_arc_agi_3.events import EventJournalEntry
 from beat_arc_agi_3.schemas import GameObservation
 from beat_arc_agi_3.session import Session
 from beat_arc_agi_3.strategy import observation_signature
 from beat_arc_agi_3.timeline import Transition
-
-
-TOOL_PHASES = {
-    "read_history": "grounding",
-    "read_file": "grounding",
-    "run_python": "grounding",
-    "write_file": "synthesis",
-    "edit_file": "synthesis",
-    "run_backtest": "verification",
-    "run_bfs": "search",
-}
 
 
 class RepairSpan(BaseModel):
@@ -43,6 +32,10 @@ class LevelLifecycle(BaseModel):
     exit_transition_index: int | None = Field(default=None, ge=0)
     entry_turn: int | None = Field(default=None, ge=1)
     exit_turn: int | None = Field(default=None, ge=1)
+    entry_timestamp: AwareDatetime | None = None
+    exit_timestamp: AwareDatetime | None = None
+    duration_to_exit_seconds: float | None = Field(default=None, ge=0)
+    observed_duration_seconds: float = Field(ge=0)
     actions: int = Field(ge=0)
     turns: int = Field(ge=0)
     prediction_exact: int = Field(ge=0)
@@ -60,6 +53,7 @@ class LevelLifecycle(BaseModel):
     bfs_exhausted: int = Field(ge=0)
     bfs_plan_depths: tuple[int, ...]
     commit_queue_sizes: tuple[int, ...]
+    executed_queue_sizes: tuple[int, ...]
     queue_cancellations: dict[str, int]
     deaths: int = Field(ge=0)
     resets: int = Field(ge=0)
@@ -68,7 +62,7 @@ class LevelLifecycle(BaseModel):
     run_failures: int = Field(ge=0)
     run_interruptions: int = Field(ge=0)
     tool_counts: dict[str, int]
-    tool_counts_by_phase: dict[str, int]
+    tool_counts_by_phase: dict[str, dict[str, int]]
 
 
 class LevelLifecycleReport(BaseModel):
@@ -151,10 +145,55 @@ def _repair_spans(
     return tuple(spans)
 
 
+def _tool_counts_by_phase(
+    entries: tuple[EventJournalEntry, ...],
+) -> dict[str, dict[str, int]]:
+    """Group completed tools by evidence-defined lifecycle boundaries."""
+
+    counts: defaultdict[str, Counter[str]] = defaultdict(Counter)
+    call_phases: dict[str, str] = {}
+    seen_action = False
+    repairing = False
+
+    def current_phase() -> str:
+        if not seen_action:
+            return "before_first_action"
+        if repairing:
+            return "mismatch_repair"
+        return "between_actions"
+
+    for entry in entries:
+        event = entry.event
+        if event.type == "tool_started":
+            call_phases[event.tool_call_id] = current_phase()
+        elif event.type == "tool_completed":
+            phase = call_phases.pop(event.tool_call_id, current_phase())
+            counts[phase][event.tool_name] += 1
+
+        if event.type == "action_started":
+            seen_action = True
+        elif event.type == "action_completed":
+            seen_action = True
+            if event.prediction_status == "mismatch":
+                repairing = True
+        elif (
+            event.type == "backtest_completed"
+            and event.status == "green"
+            and repairing
+        ):
+            repairing = False
+
+    return {
+        phase: dict(sorted(tool_counts.items()))
+        for phase, tool_counts in sorted(counts.items())
+    }
+
+
 def _extract_level(
     *,
     level: int,
     initial: GameObservation,
+    session_created_at: AwareDatetime,
     all_transitions: tuple[Transition, ...],
     all_entries: tuple[EventJournalEntry, ...],
     turn_levels: dict[int, int],
@@ -198,9 +237,6 @@ def _extract_level(
         for entry in entries
         if entry.event.type == "tool_completed"
     )
-    phase_counts: Counter[str] = Counter()
-    for tool_name, count in tool_counts.items():
-        phase_counts[TOOL_PHASES[tool_name]] += count
     bfs_events = tuple(
         entry.event for entry in entries if entry.event.type == "bfs_completed"
     )
@@ -222,6 +258,38 @@ def _extract_level(
         }
     )
     assert all(x is not None and y is not None for x, y in clicks)
+    action_entries = {
+        entry.event.transition_index: entry
+        for entry in all_entries
+        if entry.event.type == "action_completed"
+    }
+    entry_timestamp = (
+        session_created_at
+        if initial.levels_completed == level
+        else (
+            None
+            if entry_transition is None
+            or entry_transition.index not in action_entries
+            else action_entries[entry_transition.index].timestamp
+        )
+    )
+    exit_timestamp = (
+        None
+        if exit_transition is None
+        or exit_transition.index not in action_entries
+        else action_entries[exit_transition.index].timestamp
+    )
+    duration_to_exit_seconds = (
+        None
+        if entry_timestamp is None or exit_timestamp is None
+        else max(0.0, (exit_timestamp - entry_timestamp).total_seconds())
+    )
+    observed_through = entries[-1].timestamp if entries else entry_timestamp
+    observed_duration_seconds = (
+        0.0
+        if entry_timestamp is None or observed_through is None
+        else max(0.0, (observed_through - entry_timestamp).total_seconds())
+    )
 
     return LevelLifecycle(
         level=level,
@@ -246,6 +314,10 @@ def _extract_level(
             if exit_transition is None
             else transition_turns.get(exit_transition.index)
         ),
+        entry_timestamp=entry_timestamp,
+        exit_timestamp=exit_timestamp,
+        duration_to_exit_seconds=duration_to_exit_seconds,
+        observed_duration_seconds=observed_duration_seconds,
         actions=len(transitions),
         turns=len({entry.turn for entry in entries if entry.turn > 0}),
         prediction_exact=sum(
@@ -288,6 +360,11 @@ def _extract_level(
             for entry in entries
             if entry.event.type == "commit_accepted"
         ),
+        executed_queue_sizes=tuple(
+            entry.event.executed_actions
+            for entry in entries
+            if entry.event.type == "turn_completed"
+        ),
         queue_cancellations=dict(
             sorted(Counter(event.reason for event in queue_events).items())
         ),
@@ -302,7 +379,7 @@ def _extract_level(
             entry.event.type == "run_interrupted" for entry in entries
         ),
         tool_counts=dict(sorted(tool_counts.items())),
-        tool_counts_by_phase=dict(sorted(phase_counts.items())),
+        tool_counts_by_phase=_tool_counts_by_phase(entries),
     )
 
 
@@ -325,6 +402,7 @@ def extract_level_lifecycle(session: Session) -> LevelLifecycleReport:
         _extract_level(
             level=level,
             initial=initial,
+            session_created_at=session.metadata.created_at,
             all_transitions=transitions,
             all_entries=entries,
             turn_levels=turn_levels,

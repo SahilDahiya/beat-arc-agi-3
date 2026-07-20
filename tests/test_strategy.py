@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from arcengine import FrameData, GameState
 
 from beat_arc_agi_3.schemas import ArcAction, GameObservation
@@ -286,3 +287,89 @@ def test_current_level_evidence_separates_replay_green_from_online_support(
     assert "no online transition support on the current level" in context
     assert "latest current-level mismatch=transition #1 revision revision-2" in context
     assert "BFS attempts=1; found=0; exhausted=1" in context
+
+
+def test_current_level_evidence_reports_zero_at_session_and_level_entry(
+    tmp_path: Path,
+) -> None:
+    timeline = JsonlTimeline.create(
+        tmp_path / "timeline.jsonl",
+        game_id="test-game",
+    )
+    timeline.initialize(observation(0))
+    events = EventJournal.create(
+        tmp_path / "events.jsonl", session_id="test"
+    )
+
+    initial = render_current_level_evidence(timeline, events)
+
+    assert "Current-level evidence: level=0" in initial
+    assert "transitions=0; exact=0; mismatch=0; unchecked=0" in initial
+
+    timeline.append(
+        action=ArcAction(action="ACTION1"),
+        after=observation(1, levels_completed=1),
+        model_revision="revision-1",
+        prediction=prediction(1, level_up=True),
+    )
+
+    entered = render_current_level_evidence(timeline, events)
+
+    assert "Current-level evidence: level=1" in entered
+    assert "transitions=0; exact=0; mismatch=0; unchecked=0" in entered
+
+
+def test_current_level_evidence_keeps_death_and_reset_on_the_same_level(
+    tmp_path: Path,
+) -> None:
+    timeline = JsonlTimeline.create(
+        tmp_path / "timeline.jsonl",
+        game_id="test-game",
+    )
+    timeline.initialize(observation(0))
+    game_over = GameObservation.from_frame(
+        FrameData(
+            game_id="test-game",
+            frame=[[[9]]],
+            state=GameState.GAME_OVER,
+            levels_completed=0,
+            win_levels=2,
+            available_actions=[1, 2],
+        )
+    )
+    timeline.append(
+        action=ArcAction(action="ACTION1"),
+        after=game_over,
+        model_revision="revision-1",
+        prediction=None,
+    )
+    timeline.append(
+        action=ArcAction(action="RESET"),
+        after=observation(0),
+        model_revision="revision-1",
+        prediction=None,
+    )
+    events = EventJournal.create(
+        tmp_path / "events.jsonl", session_id="test"
+    )
+
+    context = render_current_level_evidence(timeline, events)
+
+    assert "Current-level evidence: level=0" in context
+    assert "transitions=2; exact=0; mismatch=0; unchecked=2" in context
+    assert "actions=ACTION1:1,RESET:1" in context
+
+
+def test_current_level_evidence_rejects_an_uninitialized_timeline(
+    tmp_path: Path,
+) -> None:
+    timeline = JsonlTimeline.create(
+        tmp_path / "timeline.jsonl",
+        game_id="test-game",
+    )
+    events = EventJournal.create(
+        tmp_path / "events.jsonl", session_id="test"
+    )
+
+    with pytest.raises(ValueError, match="initialized Timeline"):
+        render_current_level_evidence(timeline, events)
